@@ -13,11 +13,12 @@ import (
 
 // hubInterface ป้องกัน Circular Import
 type hubInterface interface {
-	Broadcast(event string, payload interface{})
+	BroadcastToRoom(roomID string, event string, payload interface{})
 	SendToSession(session *melody.Session, event string, payload interface{})
+	ActiveRooms() []string
 }
 
-// SeekTicker Broadcast seek_sync ไปทุก Client ทุก interval วินาที
+// SeekTicker Broadcast seek_sync ไปทุก Client ในทุกห้องที่กำลังเล่นอยู่ ทุก interval วินาที
 type SeekTicker struct {
 	interval time.Duration
 	hub      hubInterface
@@ -26,7 +27,6 @@ type SeekTicker struct {
 }
 
 // NewSeekTicker สร้าง SeekTicker ใหม่
-// interval คือช่วงเวลาระหว่าง Broadcast (เช่น 5 * time.Second)
 func NewSeekTicker(interval time.Duration, h hubInterface, s store.Store) *SeekTicker {
 	return &SeekTicker{
 		interval: interval,
@@ -36,7 +36,7 @@ func NewSeekTicker(interval time.Duration, h hubInterface, s store.Store) *SeekT
 	}
 }
 
-// Start เริ่ม Goroutine — เรียกครั้งเดียวตอน Startup
+// Start เริ่ม Goroutine
 func (t *SeekTicker) Start() {
 	go t.run()
 }
@@ -62,22 +62,24 @@ func (t *SeekTicker) run() {
 
 func (t *SeekTicker) tick() {
 	ctx := context.Background()
-	state, err := t.store.GetState(ctx)
-	if err != nil {
-		log.Error().Err(err).Msg("SeekTicker: failed to get state")
-		return
+	for _, roomID := range t.hub.ActiveRooms() {
+		state, err := t.store.GetState(ctx, roomID)
+		if err != nil {
+			log.Error().Err(err).Str("room_id", roomID).Msg("SeekTicker: failed to get state")
+			continue
+		}
+
+		if !state.IsPlaying {
+			continue
+		}
+
+		state.SeekTime += int(t.interval.Seconds())
+
+		if err := t.store.SetState(ctx, roomID, state); err != nil {
+			log.Error().Err(err).Str("room_id", roomID).Msg("SeekTicker: failed to set state")
+			continue
+		}
+
+		broadcaster.BroadcastSeekSync(t.hub, roomID, state.SeekTime, state.IsPlaying)
 	}
-
-	if !state.IsPlaying {
-		return
-	}
-
-	state.SeekTime += int(t.interval.Seconds())
-
-	if err := t.store.SetState(ctx, state); err != nil {
-		log.Error().Err(err).Msg("SeekTicker: failed to set state")
-		return
-	}
-
-	broadcaster.BroadcastSeekSync(t.hub, state.SeekTime, state.IsPlaying)
 }

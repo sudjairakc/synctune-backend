@@ -10,7 +10,7 @@ import (
 
 // hubInterface ป้องกัน Circular import ระหว่าง hub และ broadcaster
 type hubInterface interface {
-	Broadcast(event string, payload interface{})
+	BroadcastToRoom(roomID string, event string, payload interface{})
 	SendToSession(session *melody.Session, event string, payload interface{})
 }
 
@@ -36,18 +36,19 @@ type songSkippedPayload struct {
 	ErrorCode int    `json:"error_code"`
 }
 
-// initialStatePayload คือ Payload ของ event initial_state
-type initialStatePayload struct {
-	CurrentQueue []model.Song         `json:"current_queue"`
-	CurrentIndex int                  `json:"current_index"`
-	SeekTime     int                  `json:"seek_time"`
-	IsPlaying    bool                 `json:"is_playing"`
-	Autoplay     bool                 `json:"autoplay"`
-	Shuffle      bool                 `json:"shuffle"`
-	RandomPlay   bool                 `json:"random_play"`
-	History      []model.HistorySong  `json:"history"`
-	ChatHistory  []model.ChatMessage  `json:"chat_history"`
-	OnlineUsers  []model.User         `json:"online_users"`
+// roomJoinedPayload คือ Payload ของ event room_joined
+type roomJoinedPayload struct {
+	RoomID       string              `json:"room_id"`
+	CurrentQueue []model.Song        `json:"current_queue"`
+	CurrentIndex int                 `json:"current_index"`
+	SeekTime     int                 `json:"seek_time"`
+	IsPlaying    bool                `json:"is_playing"`
+	Autoplay     bool                `json:"autoplay"`
+	Shuffle      bool                `json:"shuffle"`
+	RandomPlay   bool                `json:"random_play"`
+	History      []model.HistorySong `json:"history"`
+	ChatHistory  []model.ChatMessage `json:"chat_history"`
+	OnlineUsers  []model.User        `json:"online_users"`
 }
 
 // playbackModePayload คือ Payload ของ event playback_mode_updated
@@ -63,9 +64,9 @@ type userEventPayload struct {
 	OnlineUsers []model.User `json:"online_users"`
 }
 
-// BroadcastQueueUpdated Broadcast event "queue_updated" ไปทุก Client
-func BroadcastQueueUpdated(h hubInterface, state *model.PlaylistState, history []model.HistorySong) {
-	h.Broadcast("queue_updated", queueUpdatedPayload{
+// BroadcastQueueUpdated Broadcast event "queue_updated" ไปทุก Client ในห้อง
+func BroadcastQueueUpdated(h hubInterface, roomID string, state *model.PlaylistState, history []model.HistorySong) {
+	h.BroadcastToRoom(roomID, "queue_updated", queueUpdatedPayload{
 		CurrentQueue: state.CurrentQueue,
 		CurrentIndex: state.CurrentIndex,
 		IsPlaying:    state.IsPlaying,
@@ -73,24 +74,23 @@ func BroadcastQueueUpdated(h hubInterface, state *model.PlaylistState, history [
 	})
 }
 
-// BroadcastSeekSync Broadcast event "seek_sync" ไปทุก Client
-func BroadcastSeekSync(h hubInterface, seekTime int, isPlaying bool) {
-	h.Broadcast("seek_sync", seekSyncPayload{
+// BroadcastSeekSync Broadcast event "seek_sync" ไปทุก Client ในห้อง
+func BroadcastSeekSync(h hubInterface, roomID string, seekTime int, isPlaying bool) {
+	h.BroadcastToRoom(roomID, "seek_sync", seekSyncPayload{
 		SeekTime:  seekTime,
 		IsPlaying: isPlaying,
 	})
 }
 
-// BroadcastSongSkipped Broadcast event "song_skipped" ไปทุก Client
-// errorCode: 0 = user skip, 101/150 = YouTube embed error
-func BroadcastSongSkipped(h hubInterface, song model.Song, errorCode int) {
+// BroadcastSongSkipped Broadcast event "song_skipped" ไปทุก Client ในห้อง
+func BroadcastSongSkipped(h hubInterface, roomID string, song model.Song, errorCode int) {
 	reason := "user_skipped"
 	if errorCode == 101 {
 		reason = "embed_not_allowed"
 	} else if errorCode == 150 {
 		reason = "embed_not_allowed_by_request"
 	}
-	h.Broadcast("song_skipped", songSkippedPayload{
+	h.BroadcastToRoom(roomID, "song_skipped", songSkippedPayload{
 		SongID:    song.ID,
 		Title:     song.Title,
 		Reason:    reason,
@@ -98,9 +98,10 @@ func BroadcastSongSkipped(h hubInterface, song model.Song, errorCode int) {
 	})
 }
 
-// SendInitialState ส่ง event "initial_state" ไปยัง Client ใหม่เท่านั้น (ไม่ Broadcast)
-func SendInitialState(h hubInterface, session *melody.Session, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User) {
-	h.SendToSession(session, "initial_state", initialStatePayload{
+// SendRoomJoined ส่ง event "room_joined" ไปยัง Client ที่เพิ่ง join (ไม่ Broadcast)
+func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User) {
+	h.SendToSession(session, "room_joined", roomJoinedPayload{
+		RoomID:       roomID,
 		CurrentQueue: state.CurrentQueue,
 		CurrentIndex: state.CurrentIndex,
 		SeekTime:     state.SeekTime,
@@ -114,28 +115,28 @@ func SendInitialState(h hubInterface, session *melody.Session, state *model.Play
 	})
 }
 
-// BroadcastPlaybackModeUpdated Broadcast event "playback_mode_updated" ไปทุก Client
-func BroadcastPlaybackModeUpdated(h hubInterface, state *model.PlaylistState) {
-	h.Broadcast("playback_mode_updated", playbackModePayload{
+// BroadcastPlaybackModeUpdated Broadcast event "playback_mode_updated" ไปทุก Client ในห้อง
+func BroadcastPlaybackModeUpdated(h hubInterface, roomID string, state *model.PlaylistState) {
+	h.BroadcastToRoom(roomID, "playback_mode_updated", playbackModePayload{
 		Autoplay:   state.Autoplay,
 		Shuffle:    state.Shuffle,
 		RandomPlay: state.RandomPlay,
 	})
 }
 
-// BroadcastUserJoined Broadcast event "user_joined" ไปทุก Client
-func BroadcastUserJoined(h hubInterface, user model.User, onlineUsers []model.User) {
-	h.Broadcast("user_joined", userEventPayload{User: user, OnlineUsers: onlineUsers})
+// BroadcastUserJoined Broadcast event "user_joined" ไปทุก Client ในห้อง
+func BroadcastUserJoined(h hubInterface, roomID string, user model.User, onlineUsers []model.User) {
+	h.BroadcastToRoom(roomID, "user_joined", userEventPayload{User: user, OnlineUsers: onlineUsers})
 }
 
-// BroadcastUserLeft Broadcast event "user_left" ไปทุก Client
-func BroadcastUserLeft(h hubInterface, user model.User, onlineUsers []model.User) {
-	h.Broadcast("user_left", userEventPayload{User: user, OnlineUsers: onlineUsers})
+// BroadcastUserLeft Broadcast event "user_left" ไปทุก Client ในห้อง
+func BroadcastUserLeft(h hubInterface, roomID string, user model.User, onlineUsers []model.User) {
+	h.BroadcastToRoom(roomID, "user_left", userEventPayload{User: user, OnlineUsers: onlineUsers})
 }
 
-// BroadcastMessageReceived Broadcast event "message_received" ไปทุก Client
-func BroadcastMessageReceived(h hubInterface, msg model.ChatMessage) {
-	h.Broadcast("message_received", msg)
+// BroadcastMessageReceived Broadcast event "message_received" ไปทุก Client ในห้อง
+func BroadcastMessageReceived(h hubInterface, roomID string, msg model.ChatMessage) {
+	h.BroadcastToRoom(roomID, "message_received", msg)
 }
 
 // MarshalWSMessage แปลง event + payload เป็น JSON bytes

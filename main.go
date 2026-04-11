@@ -175,33 +175,15 @@ func main() {
 	})
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-
 		w.Header().Set("Content-Type", "application/json")
-		if _, err := redisStore.GetState(ctx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]string{"status": "unhealthy", "error": "redis unavailable"})
-			return
-		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		ctx := context.Background()
-		state, err := redisStore.GetState(ctx)
-		if err != nil {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "failed to get state"})
-			return
-		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"active_connections": h.ClientCount(),
-			"queue_size":         len(state.CurrentQueue),
-			"is_playing":         state.IsPlaying,
-			"current_index":      state.CurrentIndex,
+			"active_rooms":       h.RoomCount(),
 		})
 	})
 

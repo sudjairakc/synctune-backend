@@ -21,13 +21,13 @@ synctune-backend/
 │   ├── playlist.go        ← Song, PlaylistState, WSMessage structs
 │   ├── user.go            ← User, ChatMessage structs
 │   └── errors.go          ← Sentinel Errors ทั้งหมด
-├── store/redis.go         ← Redis operations (state, history, chat) + FlushAll
-├── hub/hub.go             ← WebSocket connection pool + User/ChatLimiter
+├── store/redis.go         ← Redis operations per-room + FlushAll
+├── hub/hub.go             ← WebSocket connection pool + multi-room routing
 ├── controller/
 │   ├── queue.go           ← Business logic: add/remove/reorder/skip/song_ended/playback_mode
-│   └── chat.go            ← Business logic: join/send_message
-├── broadcaster/           ← Broadcast helpers
-├── ticker/seekticker.go   ← seek_sync Goroutine ทุก 5 วิ
+│   └── chat.go            ← Business logic: join (room) / send_message
+├── broadcaster/           ← Broadcast helpers (ทุกฟังก์ชันรับ roomID)
+├── ticker/seekticker.go   ← seek_sync Goroutine ทุก 5 วิ (per-room)
 └── youtube/metadata.go    ← ดึง Title + Thumbnail ผ่าน oEmbed API
 ```
 
@@ -71,19 +71,22 @@ SEEK_BROADCAST_INTERVAL=5
 MAX_QUEUE_SIZE=100
 RATE_LIMIT_ADD_SONG=10
 LOG_LEVEL=info
+ALLOWED_ORIGINS=*
 ```
 
 ---
 
-## 4. Redis Keys
+## 4. Redis Keys (Multi-Room)
 
 | Key | ประเภท | เนื้อหา |
 |---|---|---|
-| `synctune:state` | String (JSON) | PlaylistState |
-| `synctune:history` | List | HistorySong[] newest first, max 50 |
-| `synctune:chat` | List | ChatMessage[] newest first, max 100 |
+| `synctune:room:{roomID}:state` | String (JSON) | PlaylistState ของห้องนั้น |
+| `synctune:room:{roomID}:history` | List | HistorySong[] newest first, max 50 |
+| `synctune:room:{roomID}:chat` | List | ChatMessage[] newest first, max 100 |
 
-**Daily Cleanup:** ทุกวัน 06:00 Asia/Bangkok (`startDailyCleanup` ใน main.go) จะ DEL ทั้ง 3 keys
+- ห้องถูกสร้างอัตโนมัติเมื่อมี Client join
+- ห้องถูกลบทันทีเมื่อ Client คนสุดท้ายในห้อง disconnect (`hub.Unregister` → `store.DeleteRoom`)
+- **Daily Cleanup:** ทุกวัน 06:00 Asia/Bangkok (`startDailyCleanup` ใน main.go) จะ SCAN+DEL ทุก key ที่ขึ้นต้นด้วย `synctune:room:*`
 
 ---
 
@@ -92,11 +95,11 @@ LOG_LEVEL=info
 ### รับจาก Client
 | Event | Handler | Payload | หมายเหตุ |
 |---|---|---|---|
-| `join` | `controller.HandleJoin` | `{ username, profile_img? }` | ต้องส่งก่อน event อื่นทุกตัว |
-| `add_song` | `controller.HandleAddSong` | `{ youtube_url, added_by }` | `added_by` ถูก ignore ถ้า join แล้ว |
-| `remove_song` | `controller.HandleRemoveSong` | `{ song_id }` (queue_id) | |
-| `reorder_queue` | `controller.HandleReorderQueue` | `{ song_id, new_index }` (queue_id) | |
-| `report_error` | `controller.HandleReportError` | `{ song_id, error_code }` (101/150) | |
+| `join` | `controller.HandleJoin` | `{ username, profile_img?, room_id? }` | ต้องส่งก่อน event อื่นทุกตัว — ถ้าไม่ส่ง room_id จะสร้างห้องใหม่ให้ |
+| `add_song` | `controller.HandleAddSong` | `{ youtube_url, added_by }` | ต้อง join ก่อน |
+| `remove_song` | `controller.HandleRemoveSong` | `{ song_id }` (queue_id) | ต้อง join ก่อน |
+| `reorder_queue` | `controller.HandleReorderQueue` | `{ song_id, new_index }` (queue_id) | ต้อง join ก่อน |
+| `report_error` | `controller.HandleReportError` | `{ song_id, error_code }` (101/150) | ต้อง join ก่อน |
 | `song_ended` | `controller.HandleSongEnded` | `{ song_id }` (queue_id) | ดู autoplay/shuffle/random_play |
 | `skip_song` | `controller.HandleSkipSong` | `{ song_id }` (queue_id) | เล่นต่อเสมอถ้าคิวไม่ว่าง |
 | `set_playback_mode` | `controller.HandleSetPlaybackMode` | `{ autoplay?, shuffle?, random_play? }` | merge ไม่ replace |
@@ -105,14 +108,14 @@ LOG_LEVEL=info
 ### ส่งไปยัง Client
 | Event | เมื่อไหร่ | หมายเหตุ |
 |---|---|---|
-| `initial_state` | Client ใหม่ connect (ไม่ broadcast) | รวม chat_history + online_users |
-| `queue_updated` | คิวเปลี่ยนแปลง (broadcast) | รวม history ด้วยเสมอ |
-| `seek_sync` | ทุก 5 วิ ขณะ is_playing=true | |
-| `song_skipped` | ข้ามเพลง (broadcast) | reason: user_skipped / embed_not_allowed / embed_not_allowed_by_request |
-| `playback_mode_updated` | หลัง set_playback_mode สำเร็จ (broadcast) | |
-| `user_joined` | หลัง join สำเร็จ (broadcast) | รวม online_users ล่าสุด |
-| `user_left` | client disconnect หลัง join แล้ว (broadcast) | รวม online_users ล่าสุด |
-| `message_received` | หลัง send_message สำเร็จ (broadcast) | |
+| `room_joined` | หลัง join สำเร็จ (เฉพาะ Client นั้น ไม่ broadcast) | รวม room_id, queue, history, chat_history, online_users |
+| `queue_updated` | คิวเปลี่ยนแปลง (broadcast ในห้อง) | รวม history ด้วยเสมอ |
+| `seek_sync` | ทุก 5 วิ ขณะ is_playing=true | per-room |
+| `song_skipped` | ข้ามเพลง (broadcast ในห้อง) | reason: user_skipped / embed_not_allowed / embed_not_allowed_by_request |
+| `playback_mode_updated` | หลัง set_playback_mode สำเร็จ (broadcast ในห้อง) | |
+| `user_joined` | หลัง join สำเร็จ (broadcast ในห้อง) | รวม online_users ล่าสุด |
+| `user_left` | client disconnect หลัง join แล้ว (broadcast ในห้อง) | รวม online_users ล่าสุด |
+| `message_received` | หลัง send_message สำเร็จ (broadcast ในห้อง) | |
 | `error` | ส่งกลับ Client ที่ทำ action ผิด (ไม่ broadcast) | |
 
 ---
@@ -148,6 +151,12 @@ type ChatMessage struct {
 ---
 
 ## 7. Business Logic — Critical (อย่าเปลี่ยนโดยไม่อ่าน Spec)
+
+### Multi-Room
+- `Client.RoomID` ว่างเปล่าจนกว่าจะ `join` — ทุก handler ตรวจ `requireJoined` ก่อนเสมอ
+- `hub.rooms` เป็น `map[roomID]map[clientID]*Client` — Broadcast ส่งเฉพาะ Client ในห้องเดียวกัน
+- ห้องถูกลบจาก `hub.rooms` และ Redis ทันทีเมื่อ Client คนสุดท้ายออก
+- Room ID: ตัวเลข 6 หลัก (100000–999999) สุ่มด้วย `crypto/rand`
 
 ### Deduplication (report_error / skip_song / song_ended)
 ต้อง reload State จาก Redis ก่อนตรวจ `queue_id` เสมอ — ห้ามใช้ in-memory

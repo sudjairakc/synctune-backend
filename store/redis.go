@@ -5,28 +5,35 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/synctune/backend/model"
+	"strings"
 )
 
 const (
-	stateKey   = "synctune:state"
-	historyKey = "synctune:history"
-	chatKey    = "synctune:chat"
 	maxHistory = 50
 	maxChat    = 100
 )
 
+// roomStateKey คืน Redis key สำหรับ state ของห้องนั้น
+func roomStateKey(roomID string) string { return "synctune:room:" + roomID + ":state" }
+
+// roomHistoryKey คืน Redis key สำหรับ history ของห้องนั้น
+func roomHistoryKey(roomID string) string { return "synctune:room:" + roomID + ":history" }
+
+// roomChatKey คืน Redis key สำหรับ chat ของห้องนั้น
+func roomChatKey(roomID string) string { return "synctune:room:" + roomID + ":chat" }
+
 // Store กำหนด Interface สำหรับการเข้าถึง Storage
 type Store interface {
-	GetState(ctx context.Context) (*model.PlaylistState, error)
-	SetState(ctx context.Context, state *model.PlaylistState) error
-	PushHistory(ctx context.Context, song model.HistorySong) error
-	GetHistory(ctx context.Context) ([]model.HistorySong, error)
-	PushChatMessage(ctx context.Context, msg model.ChatMessage) error
-	GetChatHistory(ctx context.Context) ([]model.ChatMessage, error)
+	GetState(ctx context.Context, roomID string) (*model.PlaylistState, error)
+	SetState(ctx context.Context, roomID string, state *model.PlaylistState) error
+	PushHistory(ctx context.Context, roomID string, song model.HistorySong) error
+	GetHistory(ctx context.Context, roomID string) ([]model.HistorySong, error)
+	PushChatMessage(ctx context.Context, roomID string, msg model.ChatMessage) error
+	GetChatHistory(ctx context.Context, roomID string) ([]model.ChatMessage, error)
+	DeleteRoom(ctx context.Context, roomID string) error
 	FlushAll(ctx context.Context) error
 }
 
@@ -57,8 +64,8 @@ func NewRedisStore(url string) (*RedisStore, error) {
 
 // GetState โหลด PlaylistState จาก Redis
 // คืน State ว่าง (Queue ว่าง, IsPlaying=false) ถ้ายังไม่มีข้อมูล
-func (s *RedisStore) GetState(ctx context.Context) (*model.PlaylistState, error) {
-	data, err := s.client.Get(ctx, stateKey).Bytes()
+func (s *RedisStore) GetState(ctx context.Context, roomID string) (*model.PlaylistState, error) {
+	data, err := s.client.Get(ctx, roomStateKey(roomID)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
 			return &model.PlaylistState{
@@ -84,27 +91,26 @@ func (s *RedisStore) GetState(ctx context.Context) (*model.PlaylistState, error)
 }
 
 // SetState บันทึก PlaylistState ลง Redis
-func (s *RedisStore) SetState(ctx context.Context, state *model.PlaylistState) error {
+func (s *RedisStore) SetState(ctx context.Context, roomID string, state *model.PlaylistState) error {
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("SetState: marshal: %w", err)
 	}
-	if err := s.client.Set(ctx, stateKey, data, 0).Err(); err != nil {
+	if err := s.client.Set(ctx, roomStateKey(roomID), data, 0).Err(); err != nil {
 		return fmt.Errorf("SetState: redis SET: %w", err)
 	}
 	return nil
 }
 
 // PushHistory เพิ่ม HistorySong ลงใน History (LPUSH + LTRIM, Atomic Pipeline)
-func (s *RedisStore) PushHistory(ctx context.Context, song model.HistorySong) error {
+func (s *RedisStore) PushHistory(ctx context.Context, roomID string, song model.HistorySong) error {
 	data, err := json.Marshal(song)
 	if err != nil {
 		return fmt.Errorf("PushHistory: marshal: %w", err)
 	}
-	// ใช้ Pipeline เพื่อให้ LPUSH และ LTRIM เป็น Atomic
 	_, err = s.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.LPush(ctx, historyKey, data)
-		pipe.LTrim(ctx, historyKey, 0, maxHistory-1)
+		pipe.LPush(ctx, roomHistoryKey(roomID), data)
+		pipe.LTrim(ctx, roomHistoryKey(roomID), 0, maxHistory-1)
 		return nil
 	})
 	if err != nil {
@@ -114,8 +120,8 @@ func (s *RedisStore) PushHistory(ctx context.Context, song model.HistorySong) er
 }
 
 // GetHistory ดึง History ทั้งหมดจาก Redis (newest first)
-func (s *RedisStore) GetHistory(ctx context.Context) ([]model.HistorySong, error) {
-	items, err := s.client.LRange(ctx, historyKey, 0, maxHistory-1).Result()
+func (s *RedisStore) GetHistory(ctx context.Context, roomID string) ([]model.HistorySong, error) {
+	items, err := s.client.LRange(ctx, roomHistoryKey(roomID), 0, maxHistory-1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("GetHistory: redis LRANGE: %w", err)
 	}
@@ -123,7 +129,7 @@ func (s *RedisStore) GetHistory(ctx context.Context) ([]model.HistorySong, error
 	for _, item := range items {
 		var song model.HistorySong
 		if err := json.Unmarshal([]byte(item), &song); err != nil {
-			continue // ข้าม item ที่ parse ไม่ได้
+			continue
 		}
 		history = append(history, song)
 	}
@@ -131,14 +137,14 @@ func (s *RedisStore) GetHistory(ctx context.Context) ([]model.HistorySong, error
 }
 
 // PushChatMessage เพิ่ม ChatMessage ลงใน chat history (LPUSH + LTRIM, newest first)
-func (s *RedisStore) PushChatMessage(ctx context.Context, msg model.ChatMessage) error {
+func (s *RedisStore) PushChatMessage(ctx context.Context, roomID string, msg model.ChatMessage) error {
 	data, err := json.Marshal(msg)
 	if err != nil {
 		return fmt.Errorf("PushChatMessage: marshal: %w", err)
 	}
 	_, err = s.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-		pipe.LPush(ctx, chatKey, data)
-		pipe.LTrim(ctx, chatKey, 0, maxChat-1)
+		pipe.LPush(ctx, roomChatKey(roomID), data)
+		pipe.LTrim(ctx, roomChatKey(roomID), 0, maxChat-1)
 		return nil
 	})
 	if err != nil {
@@ -148,8 +154,8 @@ func (s *RedisStore) PushChatMessage(ctx context.Context, msg model.ChatMessage)
 }
 
 // GetChatHistory ดึง chat history จาก Redis (newest first)
-func (s *RedisStore) GetChatHistory(ctx context.Context) ([]model.ChatMessage, error) {
-	items, err := s.client.LRange(ctx, chatKey, 0, maxChat-1).Result()
+func (s *RedisStore) GetChatHistory(ctx context.Context, roomID string) ([]model.ChatMessage, error) {
+	items, err := s.client.LRange(ctx, roomChatKey(roomID), 0, maxChat-1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("GetChatHistory: redis LRANGE: %w", err)
 	}
@@ -164,10 +170,35 @@ func (s *RedisStore) GetChatHistory(ctx context.Context) ([]model.ChatMessage, e
 	return msgs, nil
 }
 
-// FlushAll ลบ keys ทั้งหมดของ synctune ออกจาก Redis
+// DeleteRoom ลบ Redis keys ทั้งหมดของห้องนั้น
+func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
+	if err := s.client.Del(ctx, roomStateKey(roomID), roomHistoryKey(roomID), roomChatKey(roomID)).Err(); err != nil {
+		return fmt.Errorf("DeleteRoom: %w", err)
+	}
+	return nil
+}
+
+// FlushAll ลบ keys ทั้งหมดของ synctune ออกจาก Redis (SCAN-based)
 func (s *RedisStore) FlushAll(ctx context.Context) error {
-	if err := s.client.Del(ctx, stateKey, historyKey, chatKey).Err(); err != nil {
-		return fmt.Errorf("FlushAll: %w", err)
+	var cursor uint64
+	var keys []string
+	for {
+		var batch []string
+		var err error
+		batch, cursor, err = s.client.Scan(ctx, cursor, "synctune:room:*", 100).Result()
+		if err != nil {
+			return fmt.Errorf("FlushAll: scan: %w", err)
+		}
+		keys = append(keys, batch...)
+		if cursor == 0 {
+			break
+		}
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	if err := s.client.Del(ctx, keys...).Err(); err != nil {
+		return fmt.Errorf("FlushAll: del: %w", err)
 	}
 	return nil
 }

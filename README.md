@@ -1,6 +1,6 @@
 # SyncTune Backend
 
-Go backend สำหรับ SyncTune — Real-time Office Jukebox
+Go backend สำหรับ SyncTune — Real-time Office Jukebox (Multi-Room)
 
 **Stack:** Go · net/http · Melody (WebSocket) · Redis · zerolog
 
@@ -82,11 +82,12 @@ gofmt -w .
 | Variable | Default | คำอธิบาย |
 |---|---|---|
 | `PORT` | `8080` | Port ที่ Backend รัน |
-| `REDIS_URL` | `localhost:6379` | Redis connection URL |
+| `REDIS_URL` | `localhost:6379` | Redis connection URL (รองรับ `redis://` URL ด้วย) |
 | `SEEK_BROADCAST_INTERVAL` | `5` | ช่วงเวลา seek_sync (วินาที) |
 | `MAX_QUEUE_SIZE` | `100` | จำนวนเพลงสูงสุดในคิว |
 | `RATE_LIMIT_ADD_SONG` | `10` | จำนวน add_song สูงสุดต่อนาที/client |
 | `LOG_LEVEL` | `info` | ระดับ Log (debug/info/warn/error) |
+| `ALLOWED_ORIGINS` | `*` | CORS origins (comma-separated) |
 
 ---
 
@@ -96,12 +97,22 @@ gofmt -w .
 |---|---|---|
 | `GET` | `/ws` | WebSocket endpoint |
 | `GET` | `/health` | Health check |
-| `GET` | `/metrics` | Metrics (connections, queue size) |
+| `GET` | `/metrics` | จำนวน connections และ rooms |
 
 ```bash
 curl http://localhost:8080/health
 curl http://localhost:8080/metrics
 ```
+
+---
+
+## Multi-Room
+
+- แต่ละห้องมี Room ID เป็นตัวเลข **6 หลัก** (เช่น `483921`)
+- ส่ง `join` โดยไม่ระบุ `room_id` → server สร้างห้องใหม่ให้อัตโนมัติ
+- ส่ง `join` พร้อม `room_id` → เข้าห้องที่มีอยู่แล้ว
+- เมื่อ Client คนสุดท้ายในห้อง disconnect → ห้องถูกลบออกจาก Redis ทันที
+- Queue, History, Chat แยกกันคนละห้อง ไม่ปนกัน
 
 ---
 
@@ -111,15 +122,15 @@ curl http://localhost:8080/metrics
 
 | Event | Payload | คำอธิบาย |
 |---|---|---|
-| `join` | `{ username, profile_img? }` | ส่งทันทีหลัง connect ก่อน event อื่น |
-| `add_song` | `{ youtube_url, added_by }` | เพิ่มเพลงลงคิว (`added_by` ถูก ignore ถ้า join แล้ว) |
+| `join` | `{ username, profile_img?, room_id? }` | ต้องส่งก่อน event อื่นเสมอ — ถ้าไม่ส่ง room_id จะสร้างห้องใหม่ |
+| `add_song` | `{ youtube_url, added_by }` | เพิ่มเพลงลงคิว |
 | `remove_song` | `{ song_id }` | ลบเพลงออกจากคิว |
 | `reorder_queue` | `{ song_id, new_index }` | เปลี่ยนลำดับเพลง |
 | `report_error` | `{ song_id, error_code }` | แจ้ง YouTube Error 101/150 |
 | `song_ended` | `{ song_id }` | เพลงจบ — server advance queue ตาม autoplay/shuffle/random |
 | `skip_song` | `{ song_id }` | ข้ามเพลงปัจจุบัน |
 | `set_playback_mode` | `{ autoplay?, shuffle?, random_play? }` | เปลี่ยน playback mode (merge ไม่ replace) |
-| `send_message` | `{ text }` | ส่งข้อความแชท (ต้อง join ก่อน) |
+| `send_message` | `{ text }` | ส่งข้อความแชท |
 
 > `song_id` ในทุก event หมายถึง `queue_id` (UUID) ไม่ใช่ YouTube Video ID
 
@@ -127,14 +138,14 @@ curl http://localhost:8080/metrics
 
 | Event | Payload | คำอธิบาย |
 |---|---|---|
-| `initial_state` | queue, index, seek, is_playing, autoplay, shuffle, random_play, history, chat_history, online_users | ส่งให้ Client ใหม่เมื่อ connect |
-| `queue_updated` | queue, index, is_playing, history | Broadcast เมื่อคิวเปลี่ยน |
-| `seek_sync` | `{ seek_time, is_playing }` | Broadcast ทุก 5 วิ ขณะกำลังเล่น |
-| `song_skipped` | `{ song_id, title, reason, error_code }` | Broadcast เมื่อข้ามเพลง |
-| `playback_mode_updated` | `{ autoplay, shuffle, random_play }` | Broadcast เมื่อ mode เปลี่ยน |
-| `user_joined` | `{ user, online_users }` | Broadcast เมื่อมีคนเข้าร่วม |
-| `user_left` | `{ user, online_users }` | Broadcast เมื่อมีคน disconnect |
-| `message_received` | `{ id, user, text, timestamp }` | Broadcast ข้อความแชทใหม่ |
+| `room_joined` | room_id, queue, index, seek, is_playing, autoplay, shuffle, random_play, history, chat_history, online_users | ส่งให้ Client หลัง join สำเร็จ (ไม่ broadcast) |
+| `queue_updated` | queue, index, is_playing, history | Broadcast ในห้องเมื่อคิวเปลี่ยน |
+| `seek_sync` | `{ seek_time, is_playing }` | Broadcast ในห้องทุก 5 วิ ขณะกำลังเล่น |
+| `song_skipped` | `{ song_id, title, reason, error_code }` | Broadcast ในห้องเมื่อข้ามเพลง |
+| `playback_mode_updated` | `{ autoplay, shuffle, random_play }` | Broadcast ในห้องเมื่อ mode เปลี่ยน |
+| `user_joined` | `{ user, online_users }` | Broadcast ในห้องเมื่อมีคนเข้าร่วม |
+| `user_left` | `{ user, online_users }` | Broadcast ในห้องเมื่อมีคน disconnect |
+| `message_received` | `{ id, user, text, timestamp }` | Broadcast ข้อความแชทใหม่ในห้อง |
 | `error` | `{ code, message }` | ส่งกลับ Client ที่ทำ action ผิด |
 
 #### song_skipped — reason values
@@ -149,9 +160,10 @@ curl http://localhost:8080/metrics
 |---|---|
 | `NOT_JOINED` | ส่ง event อื่นก่อน `join` |
 | `INVALID_USERNAME` | username ว่าง |
+| `INVALID_ROOM_ID` | room_id ไม่ใช่ตัวเลข 6 หลัก |
 | `EMPTY_MESSAGE` | text ว่าง |
 | `RATE_LIMITED` | ส่งเกิน rate limit |
-| `DUPLICATE_SONG` | เพลงซ้ำใน queue (ปิดอยู่) |
+| `DUPLICATE_SONG` | เพลงซ้ำใน queue |
 | `QUEUE_FULL` | queue เต็ม (max 100) |
 | `INVALID_URL` | YouTube URL ไม่ถูกต้อง |
 | `SONG_NOT_FOUND` | ไม่พบ song_id ใน queue |
@@ -201,7 +213,7 @@ Title และ Thumbnail ดึงอัตโนมัติจาก YouTube 
 
 ## Daily Cleanup
 
-ทุกวัน **06:00 Asia/Bangkok** backend จะล้าง Redis keys ทั้งหมด (`synctune:state`, `synctune:history`, `synctune:chat`) โดยอัตโนมัติผ่าน goroutine `startDailyCleanup` ใน `main.go`
+ทุกวัน **06:00 Asia/Bangkok** backend จะล้าง Redis keys ทุกห้อง (`synctune:room:*`) โดยอัตโนมัติผ่าน goroutine `startDailyCleanup` ใน `main.go`
 
 ---
 
@@ -215,13 +227,13 @@ synctune-backend/
 │   ├── playlist.go            ← Song, PlaylistState, WSMessage structs
 │   ├── user.go                ← User, ChatMessage structs
 │   └── errors.go              ← Sentinel errors
-├── store/redis.go             ← Redis operations (state/history/chat) + FlushAll
-├── hub/hub.go                 ← WebSocket connection pool + User/ChatLimiter
+├── store/redis.go             ← Redis operations per-room + DeleteRoom + FlushAll
+├── hub/hub.go                 ← WebSocket connection pool + multi-room routing
 ├── controller/
 │   ├── queue.go               ← Queue + playback business logic
-│   └── chat.go                ← Chat + user join business logic
-├── broadcaster/broadcaster.go ← Broadcast helper functions
-├── ticker/seekticker.go       ← seek_sync goroutine
+│   └── chat.go                ← Chat + join/room logic
+├── broadcaster/broadcaster.go ← Broadcast helper functions (per-room)
+├── ticker/seekticker.go       ← seek_sync goroutine (per-room)
 └── youtube/metadata.go        ← oEmbed API + thumbnail fallback
 ```
 
