@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/synctune/backend/model"
@@ -35,10 +36,19 @@ type RedisStore struct {
 }
 
 // NewRedisStore สร้าง RedisStore ใหม่และตรวจสอบการเชื่อมต่อ
+// รับทั้ง "host:port" และ full URL "redis://[:password@]host:port[/db]"
 func NewRedisStore(url string) (*RedisStore, error) {
-	client := redis.NewClient(&redis.Options{
-		Addr: url,
-	})
+	var opts *redis.Options
+	if strings.HasPrefix(url, "redis://") || strings.HasPrefix(url, "rediss://") {
+		var err error
+		opts, err = redis.ParseURL(url)
+		if err != nil {
+			return nil, fmt.Errorf("NewRedisStore: parse url: %w", err)
+		}
+	} else {
+		opts = &redis.Options{Addr: url}
+	}
+	client := redis.NewClient(opts)
 	if err := client.Ping(context.Background()).Err(); err != nil {
 		return nil, fmt.Errorf("NewRedisStore: ping redis: %w", err)
 	}
