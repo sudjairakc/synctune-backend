@@ -1,0 +1,26 @@
+# Binary
+synctune-backend
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Go
+vendor/
+*.test
+*.out
+coverage.out
+
+# Air (hot reload)
+tmp/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
