@@ -5,10 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/synctune/backend/model"
-	"strings"
 )
 
 const (
@@ -35,6 +36,8 @@ type Store interface {
 	GetChatHistory(ctx context.Context, roomID string) ([]model.ChatMessage, error)
 	DeleteRoom(ctx context.Context, roomID string) error
 	FlushAll(ctx context.Context) error
+	// ClaimSongEnded ใช้ SET NX เพื่อ dedup — คืน true ถ้า claim สำเร็จ (ประมวลผลได้)
+	ClaimSongEnded(ctx context.Context, roomID, queueID string) (bool, error)
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -176,6 +179,17 @@ func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 		return fmt.Errorf("DeleteRoom: %w", err)
 	}
 	return nil
+}
+
+// ClaimSongEnded ใช้ SET NX เพื่อ dedup song_ended per queue_id
+// คืน true ถ้า claim สำเร็จ (client นี้เป็นคนแรก) — คืน false ถ้ามี client อื่น claim ไปก่อนแล้ว
+func (s *RedisStore) ClaimSongEnded(ctx context.Context, roomID, queueID string) (bool, error) {
+	key := "synctune:room:" + roomID + ":song_ended:" + queueID
+	ok, err := s.client.SetNX(ctx, key, 1, 60*time.Second).Result()
+	if err != nil {
+		return false, fmt.Errorf("ClaimSongEnded: %w", err)
+	}
+	return ok, nil
 }
 
 // FlushAll ลบ keys ทั้งหมดของ synctune ออกจาก Redis (SCAN-based)

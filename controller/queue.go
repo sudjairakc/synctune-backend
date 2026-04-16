@@ -425,6 +425,16 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 		return
 	}
 
+	claimed, err := h.Store().ClaimSongEnded(ctx, roomID, currentSong.QueueID)
+	if err != nil {
+		log.Error().Err(err).Msg("HandleSongEnded: failed to claim")
+		return
+	}
+	if !claimed {
+		log.Debug().Str("room_id", roomID).Str("queue_id", currentSong.QueueID).Msg("HandleSongEnded: duplicate, ignored")
+		return
+	}
+
 	if err := h.Store().PushHistory(ctx, roomID, model.HistorySong{Song: currentSong, Status: "played"}); err != nil {
 		log.Error().Err(err).Msg("HandleSongEnded: failed to push history")
 	}
