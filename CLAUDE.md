@@ -2,7 +2,6 @@
 ## Go Backend · net/http + Melody + Redis
 
 อ่านไฟล์นี้ก่อนทำงานใดๆ ใน repo นี้เสมอ
-เอกสารฉบับเต็มอยู่ใน `./docs/` (Git Submodule จาก synctune-docs)
 
 ---
 
