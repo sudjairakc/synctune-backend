@@ -1,0 +1,721 @@
+openapi: 3.0.3
+info:
+  title: SyncTune Backend API
+  description: |
+    REST + WebSocket API สำหรับ SyncTune — ระบบ synchronized music queue แบบ multi-room
+
+    ## WebSocket
+    เชื่อมต่อที่ `ws://<host>/ws`
+    ทุก message เป็น JSON envelope:
+    ```json
+    { "event": "<event_name>", "payload": { ... } }
+    ```
+    - ต้องส่ง `join` ก่อนทุก event อื่น
+    - `song_id` ในทุก event = `queue_id` (UUID) ไม่ใช่ YouTube Video ID
+  version: 1.0.0
+
+servers:
+  - url: https://synctune-backend-production.up.railway.app
+    description: Production (Railway)
+  - url: http://localhost:8080
+    description: Local development
+
+tags:
+  - name: Health
+    description: Server health & metrics
+  - name: WebSocket (Client → Server)
+    description: Events ที่ Client ส่งมาให้ Server จัดการ
+  - name: WebSocket (Server → Client)
+    description: Events ที่ Server ส่งกลับไปยัง Client
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Health check
+      responses:
+        "200":
+          description: Server running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+
+  /metrics:
+    get:
+      tags: [Health]
+      summary: Server metrics
+      responses:
+        "200":
+          description: Active connections and rooms
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  active_connections:
+                    type: integer
+                    example: 12
+                  active_rooms:
+                    type: integer
+                    example: 3
+
+  /ws:
+    get:
+      tags: [WebSocket (Client → Server)]
+      summary: WebSocket upgrade endpoint
+      description: |
+        Upgrade HTTP connection เป็น WebSocket
+        จากนั้นส่ง/รับ message ผ่าน JSON envelope `{ "event", "payload" }`
+      responses:
+        "101":
+          description: Switching Protocols (WebSocket upgrade สำเร็จ)
+        "400":
+          description: Bad Request (WebSocket upgrade ล้มเหลว)
+
+components:
+  schemas:
+
+    # ─── Core Models ───────────────────────────────────────────────────────────
+
+    Song:
+      type: object
+      properties:
+        queue_id:
+          type: string
+          format: uuid
+          description: Unique ID ต่อ queue slot — ใช้ใน event ทุกตัว (ไม่ใช่ YouTube Video ID)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        id:
+          type: string
+          description: YouTube Video ID (11 chars)
+          example: "dQw4w9WgXcQ"
+        title:
+          type: string
+          example: "Rick Astley - Never Gonna Give You Up"
+        thumbnail:
+          type: string
+          format: uri
+          example: "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg"
+        added_by:
+          type: string
+          example: "Alice"
+        duration:
+          type: integer
+          description: ความยาว (วินาที), 0 = ไม่ทราบ
+          example: 213
+
+    HistorySong:
+      allOf:
+        - $ref: "#/components/schemas/Song"
+        - type: object
+          properties:
+            status:
+              type: string
+              enum: [played, skipped]
+              example: "played"
+
+    User:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: UUID ต่อ session (สร้างโดย server)
+          example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        username:
+          type: string
+          example: "Alice"
+        profile_img:
+          type: string
+          format: uri
+          description: URL หรือ "" ถ้าไม่มี
+          example: "https://example.com/avatar.png"
+
+    ChatMessage:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+        user:
+          $ref: "#/components/schemas/User"
+        text:
+          type: string
+          maxLength: 500
+          example: "สวัสดีทุกคน!"
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix milliseconds
+          example: 1713200000000
+
+    WSEnvelope:
+      type: object
+      required: [event, payload]
+      properties:
+        event:
+          type: string
+        payload:
+          type: object
+
+    WSError:
+      type: object
+      properties:
+        code:
+          type: string
+          example: "NOT_JOINED"
+        message:
+          type: string
+          example: "ต้องส่ง join ก่อน"
+
+    # ─── Client → Server Payloads ──────────────────────────────────────────────
+
+    JoinPayload:
+      type: object
+      required: [username]
+      properties:
+        username:
+          type: string
+          maxLength: 30
+          example: "Alice"
+        profile_img:
+          type: string
+          format: uri
+          description: Optional profile image URL
+          example: "https://example.com/avatar.png"
+        room_id:
+          type: string
+          pattern: '^\d{6}$'
+          description: ตัวเลข 6 หลัก ถ้าไม่ส่งจะสร้างห้องใหม่
+          example: "123456"
+
+    AddSongPayload:
+      type: object
+      required: [youtube_url]
+      properties:
+        youtube_url:
+          type: string
+          format: uri
+          example: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        added_by:
+          type: string
+          description: ถ้าไม่ส่งจะใช้ username จาก session
+          example: "Alice"
+
+    RemoveSongPayload:
+      type: object
+      required: [song_id]
+      properties:
+        song_id:
+          type: string
+          format: uuid
+          description: queue_id ของเพลงที่ต้องการลบ
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    ReorderQueuePayload:
+      type: object
+      required: [song_id, new_index]
+      properties:
+        song_id:
+          type: string
+          format: uuid
+          description: queue_id ของเพลงที่ต้องการย้าย
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        new_index:
+          type: integer
+          minimum: 0
+          example: 2
+
+    ReportErrorPayload:
+      type: object
+      required: [song_id, error_code]
+      properties:
+        song_id:
+          type: string
+          format: uuid
+          description: queue_id ของเพลงที่เกิด error (ต้องเป็นเพลงที่กำลังเล่นอยู่)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        error_code:
+          type: integer
+          enum: [101, 150]
+          description: |
+            - 101: Video not playable in embedded players
+            - 150: Video not playable in embedded players (by request)
+          example: 101
+
+    SongEndedPayload:
+      type: object
+      required: [song_id]
+      properties:
+        song_id:
+          type: string
+          format: uuid
+          description: queue_id ของเพลงที่เล่นจบ (ต้องตรงกับเพลงปัจจุบัน)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    SkipSongPayload:
+      type: object
+      required: [song_id]
+      properties:
+        song_id:
+          type: string
+          format: uuid
+          description: queue_id ของเพลงที่ต้องการ skip (ต้องเป็นเพลงที่กำลังเล่นอยู่)
+          example: "550e8400-e29b-41d4-a716-446655440000"
+
+    SetPlaybackModePayload:
+      type: object
+      description: ส่งเฉพาะ field ที่ต้องการเปลี่ยน (merge ไม่ replace) shuffle และ random_play ห้ามเปิดพร้อมกัน
+      properties:
+        autoplay:
+          type: boolean
+          example: true
+        shuffle:
+          type: boolean
+          example: false
+        random_play:
+          type: boolean
+          example: false
+
+    SendMessagePayload:
+      type: object
+      required: [text]
+      properties:
+        text:
+          type: string
+          maxLength: 500
+          example: "สวัสดีทุกคน!"
+
+    # ─── Server → Client Payloads ──────────────────────────────────────────────
+
+    RoomJoinedPayload:
+      type: object
+      description: ส่งเฉพาะ client ที่เพิ่ง join (ไม่ broadcast)
+      properties:
+        room_id:
+          type: string
+          example: "123456"
+        current_queue:
+          type: array
+          items:
+            $ref: "#/components/schemas/Song"
+        current_index:
+          type: integer
+          example: 0
+        seek_time:
+          type: integer
+          description: ตำแหน่งเล่นปัจจุบัน (วินาที)
+          example: 42
+        is_playing:
+          type: boolean
+          example: true
+        autoplay:
+          type: boolean
+          example: true
+        shuffle:
+          type: boolean
+          example: false
+        random_play:
+          type: boolean
+          example: false
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistorySong"
+        chat_history:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        online_users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+
+    QueueUpdatedPayload:
+      type: object
+      description: Broadcast ไปทุก client ในห้องเมื่อคิวเปลี่ยน
+      properties:
+        current_queue:
+          type: array
+          items:
+            $ref: "#/components/schemas/Song"
+        current_index:
+          type: integer
+          example: 1
+        is_playing:
+          type: boolean
+          example: true
+        history:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistorySong"
+
+    SeekSyncPayload:
+      type: object
+      description: Broadcast ทุก 5 วินาที ขณะ is_playing=true
+      properties:
+        seek_time:
+          type: integer
+          description: ตำแหน่งเล่นปัจจุบัน (วินาที)
+          example: 47
+        is_playing:
+          type: boolean
+          example: true
+
+    SongSkippedPayload:
+      type: object
+      properties:
+        song_id:
+          type: string
+          description: YouTube Video ID (ไม่ใช่ queue_id)
+          example: "dQw4w9WgXcQ"
+        title:
+          type: string
+          example: "Rick Astley - Never Gonna Give You Up"
+        reason:
+          type: string
+          enum: [user_skipped, embed_not_allowed, embed_not_allowed_by_request]
+          example: "user_skipped"
+        error_code:
+          type: integer
+          description: 0 = user skip, 101/150 = YouTube embed error
+          example: 0
+
+    PlaybackModeUpdatedPayload:
+      type: object
+      properties:
+        autoplay:
+          type: boolean
+          example: true
+        shuffle:
+          type: boolean
+          example: false
+        random_play:
+          type: boolean
+          example: false
+
+    UserEventPayload:
+      type: object
+      description: ใช้ทั้ง user_joined และ user_left
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        online_users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+
+  # ─── WebSocket Message Examples ────────────────────────────────────────────
+
+  examples:
+
+    # Client → Server
+    WS_join:
+      summary: "join — เข้าห้องใหม่"
+      value:
+        event: join
+        payload:
+          username: "Alice"
+          profile_img: "https://example.com/avatar.png"
+
+    WS_join_existing_room:
+      summary: "join — เข้าห้องที่มีอยู่"
+      value:
+        event: join
+        payload:
+          username: "Bob"
+          room_id: "123456"
+
+    WS_add_song:
+      summary: "add_song"
+      value:
+        event: add_song
+        payload:
+          youtube_url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+          added_by: "Alice"
+
+    WS_remove_song:
+      summary: "remove_song"
+      value:
+        event: remove_song
+        payload:
+          song_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    WS_reorder_queue:
+      summary: "reorder_queue"
+      value:
+        event: reorder_queue
+        payload:
+          song_id: "550e8400-e29b-41d4-a716-446655440000"
+          new_index: 2
+
+    WS_report_error:
+      summary: "report_error — YouTube error 101"
+      value:
+        event: report_error
+        payload:
+          song_id: "550e8400-e29b-41d4-a716-446655440000"
+          error_code: 101
+
+    WS_song_ended:
+      summary: "song_ended"
+      value:
+        event: song_ended
+        payload:
+          song_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    WS_skip_song:
+      summary: "skip_song"
+      value:
+        event: skip_song
+        payload:
+          song_id: "550e8400-e29b-41d4-a716-446655440000"
+
+    WS_set_playback_mode:
+      summary: "set_playback_mode — เปิด autoplay"
+      value:
+        event: set_playback_mode
+        payload:
+          autoplay: true
+
+    WS_send_message:
+      summary: "send_message"
+      value:
+        event: send_message
+        payload:
+          text: "สวัสดีทุกคน!"
+
+    # Server → Client
+    WS_room_joined:
+      summary: "room_joined (Server → Client เท่านั้น)"
+      value:
+        event: room_joined
+        payload:
+          room_id: "123456"
+          current_queue: []
+          current_index: 0
+          seek_time: 0
+          is_playing: false
+          autoplay: true
+          shuffle: false
+          random_play: false
+          history: []
+          chat_history: []
+          online_users:
+            - id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              username: "Alice"
+              profile_img: ""
+
+    WS_queue_updated:
+      summary: "queue_updated (Broadcast)"
+      value:
+        event: queue_updated
+        payload:
+          current_queue:
+            - queue_id: "550e8400-e29b-41d4-a716-446655440000"
+              id: "dQw4w9WgXcQ"
+              title: "Rick Astley - Never Gonna Give You Up"
+              thumbnail: "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg"
+              added_by: "Alice"
+              duration: 213
+          current_index: 0
+          is_playing: true
+          history: []
+
+    WS_seek_sync:
+      summary: "seek_sync (Broadcast ทุก 5 วิ)"
+      value:
+        event: seek_sync
+        payload:
+          seek_time: 47
+          is_playing: true
+
+    WS_song_skipped:
+      summary: "song_skipped (Broadcast)"
+      value:
+        event: song_skipped
+        payload:
+          song_id: "dQw4w9WgXcQ"
+          title: "Rick Astley - Never Gonna Give You Up"
+          reason: "user_skipped"
+          error_code: 0
+
+    WS_playback_mode_updated:
+      summary: "playback_mode_updated (Broadcast)"
+      value:
+        event: playback_mode_updated
+        payload:
+          autoplay: true
+          shuffle: false
+          random_play: false
+
+    WS_user_joined:
+      summary: "user_joined (Broadcast)"
+      value:
+        event: user_joined
+        payload:
+          user:
+            id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            username: "Alice"
+            profile_img: ""
+          online_users:
+            - id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+              username: "Alice"
+              profile_img: ""
+
+    WS_user_left:
+      summary: "user_left (Broadcast)"
+      value:
+        event: user_left
+        payload:
+          user:
+            id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            username: "Alice"
+            profile_img: ""
+          online_users: []
+
+    WS_message_received:
+      summary: "message_received (Broadcast)"
+      value:
+        event: message_received
+        payload:
+          id: "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+          user:
+            id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+            username: "Alice"
+            profile_img: ""
+          text: "สวัสดีทุกคน!"
+          timestamp: 1713200000000
+
+    WS_error:
+      summary: "error (ส่งเฉพาะ client ที่ทำ action ผิด)"
+      value:
+        event: error
+        payload:
+          code: "NOT_JOINED"
+          message: "ต้องส่ง join ก่อน"
+
+x-websocket-events:
+  client-to-server:
+    join:
+      description: เข้าร่วมห้อง ต้องส่งก่อน event อื่นทุกตัว ถ้าไม่ส่ง room_id จะสร้างห้องใหม่
+      payload: { $ref: "#/components/schemas/JoinPayload" }
+      rate_limit: none
+      requires_join: false
+
+    add_song:
+      description: เพิ่มเพลงเข้าคิว ตรวจ duplicate และ queue full อัตโนมัติ
+      payload: { $ref: "#/components/schemas/AddSongPayload" }
+      rate_limit: "10 ครั้ง/นาที"
+      requires_join: true
+
+    remove_song:
+      description: ลบเพลงออกจากคิว ไม่สามารถลบเพลงที่กำลังเล่นอยู่ได้
+      payload: { $ref: "#/components/schemas/RemoveSongPayload" }
+      rate_limit: none
+      requires_join: true
+
+    reorder_queue:
+      description: ย้ายเพลงในคิวไปยังตำแหน่งใหม่
+      payload: { $ref: "#/components/schemas/ReorderQueuePayload" }
+      rate_limit: none
+      requires_join: true
+
+    report_error:
+      description: รายงาน YouTube embed error (101/150) ทำให้ skip เพลงปัจจุบันอัตโนมัติ
+      payload: { $ref: "#/components/schemas/ReportErrorPayload" }
+      rate_limit: "5 ครั้ง/นาที"
+      requires_join: true
+
+    song_ended:
+      description: แจ้งว่าเพลงเล่นจบแล้ว server จะตัดสินใจว่าจะเล่นต่อหรือหยุดตาม autoplay/shuffle/random_play
+      payload: { $ref: "#/components/schemas/SongEndedPayload" }
+      rate_limit: none
+      requires_join: true
+
+    skip_song:
+      description: ข้ามเพลงปัจจุบัน เล่นต่อเสมอถ้าคิวไม่ว่าง (ไม่ดู autoplay)
+      payload: { $ref: "#/components/schemas/SkipSongPayload" }
+      rate_limit: none
+      requires_join: true
+
+    set_playback_mode:
+      description: ตั้งค่า autoplay / shuffle / random_play (merge ไม่ replace) shuffle และ random_play ห้ามเปิดพร้อมกัน
+      payload: { $ref: "#/components/schemas/SetPlaybackModePayload" }
+      rate_limit: none
+      requires_join: true
+
+    send_message:
+      description: ส่งข้อความแชท max 500 ตัวอักษร
+      payload: { $ref: "#/components/schemas/SendMessagePayload" }
+      rate_limit: "30 ครั้ง/นาที"
+      requires_join: true
+
+  server-to-client:
+    room_joined:
+      description: ส่งเฉพาะ client ที่เพิ่ง join สำเร็จ (ไม่ broadcast) มี full state ของห้อง
+      payload: { $ref: "#/components/schemas/RoomJoinedPayload" }
+      target: unicast
+
+    queue_updated:
+      description: Broadcast เมื่อคิวเปลี่ยน (add/remove/reorder/skip/song_ended/report_error/set_playback_mode)
+      payload: { $ref: "#/components/schemas/QueueUpdatedPayload" }
+      target: broadcast
+
+    seek_sync:
+      description: Broadcast ทุก 5 วินาที ขณะ is_playing=true เพื่อ sync ตำแหน่งเล่น
+      payload: { $ref: "#/components/schemas/SeekSyncPayload" }
+      target: broadcast
+
+    song_skipped:
+      description: Broadcast เมื่อเพลงถูก skip (user_skipped หรือ embed error)
+      payload: { $ref: "#/components/schemas/SongSkippedPayload" }
+      target: broadcast
+
+    playback_mode_updated:
+      description: Broadcast หลัง set_playback_mode สำเร็จ
+      payload: { $ref: "#/components/schemas/PlaybackModeUpdatedPayload" }
+      target: broadcast
+
+    user_joined:
+      description: Broadcast หลัง join สำเร็จ พร้อม online_users ล่าสุด
+      payload: { $ref: "#/components/schemas/UserEventPayload" }
+      target: broadcast
+
+    user_left:
+      description: Broadcast เมื่อ client disconnect (หลัง join แล้ว) พร้อม online_users ล่าสุด
+      payload: { $ref: "#/components/schemas/UserEventPayload" }
+      target: broadcast
+
+    message_received:
+      description: Broadcast เมื่อมีข้อความแชทใหม่
+      payload: { $ref: "#/components/schemas/ChatMessage" }
+      target: broadcast
+
+    error:
+      description: ส่งเฉพาะ client ที่ทำ action ผิด (invalid payload, not joined, rate limited, ฯลฯ)
+      payload: { $ref: "#/components/schemas/WSError" }
+      target: unicast
+
+x-error-codes:
+  NOT_JOINED: ยังไม่ได้ส่ง join
+  INVALID_USERNAME: username ว่างหรือไม่ถูกต้อง
+  INVALID_ROOM_ID: room_id ไม่ใช่ตัวเลข 6 หลัก
+  INVALID_MESSAGE: JSON payload ไม่ถูกต้อง
+  INVALID_URL: YouTube URL ไม่ถูกต้อง
+  INVALID_INDEX: new_index อยู่นอกขอบเขต
+  INVALID_ERROR_CODE: error_code ต้องเป็น 101 หรือ 150
+  INVALID_PLAYBACK_MODE: shuffle และ random_play เปิดพร้อมกันไม่ได้
+  DUPLICATE_SONG: เพลงนี้อยู่ในคิวแล้ว
+  QUEUE_FULL: คิวเต็ม (max 100)
+  SONG_NOT_FOUND: ไม่พบ queue_id ในคิว
+  CANNOT_REMOVE_CURRENT: ไม่สามารถลบเพลงที่กำลังเล่นอยู่
+  RATE_LIMITED: ทำ action บ่อยเกินกำหนด
+  EMPTY_MESSAGE: ข้อความว่าง
+  SERVER_ERROR: เกิดข้อผิดพลาดภายใน server
