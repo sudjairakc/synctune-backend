@@ -15,7 +15,8 @@ type Song struct {
 // HistorySong แทนเพลงที่เล่นจบแล้วหรือถูก Skip
 type HistorySong struct {
 	Song
-	Status string `json:"status"` // "played" | "skipped"
+	Status    string `json:"status"`              // "played" | "skipped"
+	SkippedBy string `json:"skipped_by,omitempty"` // username ของคนที่ skip (ว่างถ้าเป็น system)
 }
 
 // PlaylistState คือ State หลักของระบบทั้งหมด

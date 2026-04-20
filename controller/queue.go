@@ -366,7 +366,7 @@ func HandleSkipSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 		return
 	}
 
-	if err := h.Store().PushHistory(ctx, roomID, model.HistorySong{Song: currentSong, Status: "skipped"}); err != nil {
+	if err := h.Store().PushHistory(ctx, roomID, model.HistorySong{Song: currentSong, Status: "skipped", SkippedBy: client.User.Username}); err != nil {
 		log.Error().Err(err).Msg("HandleSkipSong: failed to push history")
 	}
 
