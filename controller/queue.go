@@ -567,7 +567,7 @@ func extractVideoID(rawURL string) (string, error) {
 
 	var videoID string
 	switch u.Host {
-	case "www.youtube.com", "youtube.com", "m.youtube.com":
+	case "www.youtube.com", "youtube.com", "m.youtube.com", "music.youtube.com":
 		videoID = u.Query().Get("v")
 	case "youtu.be":
 		videoID = strings.TrimPrefix(u.Path, "/")
