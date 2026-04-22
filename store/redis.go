@@ -26,6 +26,9 @@ func roomHistoryKey(roomID string) string { return "synctune:room:" + roomID + "
 // roomChatKey คืน Redis key สำหรับ chat ของห้องนั้น
 func roomChatKey(roomID string) string { return "synctune:room:" + roomID + ":chat" }
 
+// roomSoundPadKey คืน Redis key สำหรับ sound pad ของห้องนั้น
+func roomSoundPadKey(roomID string) string { return "synctune:room:" + roomID + ":soundpad" }
+
 // Store กำหนด Interface สำหรับการเข้าถึง Storage
 type Store interface {
 	GetState(ctx context.Context, roomID string) (*model.PlaylistState, error)
@@ -34,6 +37,8 @@ type Store interface {
 	GetHistory(ctx context.Context, roomID string) ([]model.HistorySong, error)
 	PushChatMessage(ctx context.Context, roomID string, msg model.ChatMessage) error
 	GetChatHistory(ctx context.Context, roomID string) ([]model.ChatMessage, error)
+	GetSoundPad(ctx context.Context, roomID string) ([]*model.SoundPadSlot, error)
+	SetSoundPad(ctx context.Context, roomID string, pad []*model.SoundPadSlot) error
 	DeleteRoom(ctx context.Context, roomID string) error
 	FlushAll(ctx context.Context) error
 	// ClaimSongEnded ใช้ SET NX เพื่อ dedup — คืน true ถ้า claim สำเร็จ (ประมวลผลได้)
@@ -173,9 +178,37 @@ func (s *RedisStore) GetChatHistory(ctx context.Context, roomID string) ([]model
 	return msgs, nil
 }
 
+// GetSoundPad โหลด Sound Pad ([50]*SoundPadSlot) จาก Redis
+func (s *RedisStore) GetSoundPad(ctx context.Context, roomID string) ([]*model.SoundPadSlot, error) {
+	pad := make([]*model.SoundPadSlot, model.SoundPadSize)
+	val, err := s.client.Get(ctx, roomSoundPadKey(roomID)).Result()
+	if errors.Is(err, redis.Nil) {
+		return pad, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetSoundPad: redis GET: %w", err)
+	}
+	if err := json.Unmarshal([]byte(val), &pad); err != nil {
+		return nil, fmt.Errorf("GetSoundPad: unmarshal: %w", err)
+	}
+	return pad, nil
+}
+
+// SetSoundPad บันทึก Sound Pad ลง Redis
+func (s *RedisStore) SetSoundPad(ctx context.Context, roomID string, pad []*model.SoundPadSlot) error {
+	data, err := json.Marshal(pad)
+	if err != nil {
+		return fmt.Errorf("SetSoundPad: marshal: %w", err)
+	}
+	if err := s.client.Set(ctx, roomSoundPadKey(roomID), data, 0).Err(); err != nil {
+		return fmt.Errorf("SetSoundPad: redis SET: %w", err)
+	}
+	return nil
+}
+
 // DeleteRoom ลบ Redis keys ทั้งหมดของห้องนั้น
 func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
-	if err := s.client.Del(ctx, roomStateKey(roomID), roomHistoryKey(roomID), roomChatKey(roomID)).Err(); err != nil {
+	if err := s.client.Del(ctx, roomStateKey(roomID), roomHistoryKey(roomID), roomChatKey(roomID), roomSoundPadKey(roomID)).Err(); err != nil {
 		return fmt.Errorf("DeleteRoom: %w", err)
 	}
 	return nil

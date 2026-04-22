@@ -520,7 +520,7 @@ func HandleSetPlaybackMode(h *hub.Hub, client *hub.Client, rawPayload json.RawMe
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 }
 
-// HandleSetPlaybackSpeed จัดการ Event set_playback_speed — broadcast ไปทั้งห้อง (ไม่ persist)
+// HandleSetPlaybackSpeed จัดการ Event set_playback_speed — persist + broadcast ไปทั้งห้อง
 func HandleSetPlaybackSpeed(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	if client.User.ID == "" {
 		h.SendToSession(client.Conn, "error", model.WSError{Code: "NOT_JOINED", Message: "ต้องส่ง join ก่อน"})
@@ -535,6 +535,17 @@ func HandleSetPlaybackSpeed(h *hub.Hub, client *hub.Client, rawPayload json.RawM
 	// รับค่าที่ YouTube IFrame API รองรับ: 0.25, 0.5, 1, 1.5, 2
 	allowed := map[float64]bool{0.25: true, 0.5: true, 1: true, 1.5: true, 2: true}
 	if !allowed[payload.Speed] {
+		return
+	}
+	ctx := context.Background()
+	state, err := h.Store().GetState(ctx, client.RoomID)
+	if err != nil {
+		log.Error().Err(err).Msg("HandleSetPlaybackSpeed: failed to get state")
+		return
+	}
+	state.PlaybackSpeed = payload.Speed
+	if err := h.Store().SetState(ctx, client.RoomID, state); err != nil {
+		log.Error().Err(err).Msg("HandleSetPlaybackSpeed: failed to save state")
 		return
 	}
 	log.Info().Str("room_id", client.RoomID).Float64("speed", payload.Speed).Msg("playback speed changed")

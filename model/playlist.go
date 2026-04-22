@@ -21,14 +21,23 @@ type HistorySong struct {
 
 // PlaylistState คือ State หลักของระบบทั้งหมด
 type PlaylistState struct {
-	CurrentQueue []Song `json:"current_queue"`
-	CurrentIndex int    `json:"current_index"`
-	SeekTime     int    `json:"seek_time"`
-	IsPlaying    bool   `json:"is_playing"`
-	Autoplay     bool   `json:"autoplay"`
-	Shuffle      bool   `json:"shuffle"`
-	RandomPlay   bool   `json:"random_play"`
+	CurrentQueue  []Song  `json:"current_queue"`
+	CurrentIndex  int     `json:"current_index"`
+	SeekTime      int     `json:"seek_time"`
+	IsPlaying     bool    `json:"is_playing"`
+	Autoplay      bool    `json:"autoplay"`
+	Shuffle       bool    `json:"shuffle"`
+	RandomPlay    bool    `json:"random_play"`
+	PlaybackSpeed float64 `json:"playback_speed"`
 }
+
+// SoundPadSlot แทน 1 slot ของ Sound Pad (nil = ว่าง)
+type SoundPadSlot struct {
+	VideoID string `json:"video_id"`
+	Title   string `json:"title"`
+}
+
+const SoundPadSize = 50
 
 // WSMessage คือ Envelope ของทุก WebSocket Message
 type WSMessage struct {

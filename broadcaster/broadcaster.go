@@ -8,6 +8,18 @@ import (
 	"github.com/synctune/backend/model"
 )
 
+// soundPadUpdatedPayload คือ payload ของ event soundpad_updated
+type soundPadUpdatedPayload struct {
+	SoundPad []*model.SoundPadSlot `json:"sound_pad"`
+}
+
+// soundPadPlayPayload คือ payload ของ event soundpad_play
+type soundPadPlayPayload struct {
+	Slot    int    `json:"slot"`
+	VideoID string `json:"video_id"`
+	UserID  string `json:"user_id"`
+}
+
 // hubInterface ป้องกัน Circular import ระหว่าง hub และ broadcaster
 type hubInterface interface {
 	BroadcastToRoom(roomID string, event string, payload interface{})
@@ -38,17 +50,19 @@ type songSkippedPayload struct {
 
 // roomJoinedPayload คือ Payload ของ event room_joined
 type roomJoinedPayload struct {
-	RoomID       string              `json:"room_id"`
-	CurrentQueue []model.Song        `json:"current_queue"`
-	CurrentIndex int                 `json:"current_index"`
-	SeekTime     int                 `json:"seek_time"`
-	IsPlaying    bool                `json:"is_playing"`
-	Autoplay     bool                `json:"autoplay"`
-	Shuffle      bool                `json:"shuffle"`
-	RandomPlay   bool                `json:"random_play"`
-	History      []model.HistorySong `json:"history"`
-	ChatHistory  []model.ChatMessage `json:"chat_history"`
-	OnlineUsers  []model.User        `json:"online_users"`
+	RoomID       string                `json:"room_id"`
+	CurrentQueue []model.Song          `json:"current_queue"`
+	CurrentIndex int                   `json:"current_index"`
+	SeekTime     int                   `json:"seek_time"`
+	IsPlaying    bool                  `json:"is_playing"`
+	Autoplay     bool                  `json:"autoplay"`
+	Shuffle      bool                  `json:"shuffle"`
+	RandomPlay   bool                  `json:"random_play"`
+	History      []model.HistorySong   `json:"history"`
+	ChatHistory  []model.ChatMessage   `json:"chat_history"`
+	OnlineUsers   []model.User          `json:"online_users"`
+	SoundPad      []*model.SoundPadSlot `json:"sound_pad"`
+	PlaybackSpeed float64               `json:"playback_speed"`
 }
 
 // playbackModePayload คือ Payload ของ event playback_mode_updated
@@ -99,19 +113,25 @@ func BroadcastSongSkipped(h hubInterface, roomID string, song model.Song, errorC
 }
 
 // SendRoomJoined ส่ง event "room_joined" ไปยัง Client ที่เพิ่ง join (ไม่ Broadcast)
-func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User) {
+func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot) {
+	speed := state.PlaybackSpeed
+	if speed == 0 {
+		speed = 1
+	}
 	h.SendToSession(session, "room_joined", roomJoinedPayload{
-		RoomID:       roomID,
-		CurrentQueue: state.CurrentQueue,
-		CurrentIndex: state.CurrentIndex,
-		SeekTime:     state.SeekTime,
-		IsPlaying:    state.IsPlaying,
-		Autoplay:     state.Autoplay,
-		Shuffle:      state.Shuffle,
-		RandomPlay:   state.RandomPlay,
-		History:      history,
-		ChatHistory:  chatHistory,
-		OnlineUsers:  onlineUsers,
+		RoomID:        roomID,
+		CurrentQueue:  state.CurrentQueue,
+		CurrentIndex:  state.CurrentIndex,
+		SeekTime:      state.SeekTime,
+		IsPlaying:     state.IsPlaying,
+		Autoplay:      state.Autoplay,
+		Shuffle:       state.Shuffle,
+		RandomPlay:    state.RandomPlay,
+		History:       history,
+		ChatHistory:   chatHistory,
+		OnlineUsers:   onlineUsers,
+		SoundPad:      soundPad,
+		PlaybackSpeed: speed,
 	})
 }
 
@@ -137,6 +157,16 @@ func BroadcastUserLeft(h hubInterface, roomID string, user model.User, onlineUse
 // BroadcastMessageReceived Broadcast event "message_received" ไปทุก Client ในห้อง
 func BroadcastMessageReceived(h hubInterface, roomID string, msg model.ChatMessage) {
 	h.BroadcastToRoom(roomID, "message_received", msg)
+}
+
+// BroadcastSoundPadUpdated broadcast config ของ sound pad ไปทั้งห้อง
+func BroadcastSoundPadUpdated(h hubInterface, roomID string, pad []*model.SoundPadSlot) {
+	h.BroadcastToRoom(roomID, "soundpad_updated", soundPadUpdatedPayload{SoundPad: pad})
+}
+
+// BroadcastSoundPadPlay broadcast trigger เล่นเสียงไปทั้งห้อง
+func BroadcastSoundPadPlay(h hubInterface, roomID string, slot int, videoID, userID string) {
+	h.BroadcastToRoom(roomID, "soundpad_play", soundPadPlayPayload{Slot: slot, VideoID: videoID, UserID: userID})
 }
 
 // MarshalWSMessage แปลง event + payload เป็น JSON bytes

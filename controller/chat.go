@@ -101,11 +101,15 @@ func HandleJoin(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		chatHistory = []model.ChatMessage{}
 	}
 	slices.Reverse(chatHistory)
+	soundPad, err := h.Store().GetSoundPad(ctx, roomID)
+	if err != nil {
+		soundPad = make([]*model.SoundPadSlot, model.SoundPadSize)
+	}
 
 	log.Info().Str("event", "join").Str("user_id", user.ID).Str("username", user.Username).Str("room_id", roomID).Msg("user joined room")
 
 	// ส่ง room_joined เฉพาะ Client ที่ join
-	broadcaster.SendRoomJoined(h, client.Conn, roomID, state, history, chatHistory, h.OnlineUsersInRoom(roomID))
+	broadcaster.SendRoomJoined(h, client.Conn, roomID, state, history, chatHistory, h.OnlineUsersInRoom(roomID), soundPad)
 
 	// Broadcast user_joined ไปทุกคนในห้อง
 	broadcaster.BroadcastUserJoined(h, roomID, user, h.OnlineUsersInRoom(roomID))
