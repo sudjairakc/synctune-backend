@@ -520,6 +520,27 @@ func HandleSetPlaybackMode(h *hub.Hub, client *hub.Client, rawPayload json.RawMe
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 }
 
+// HandleSetPlaybackSpeed จัดการ Event set_playback_speed — broadcast ไปทั้งห้อง (ไม่ persist)
+func HandleSetPlaybackSpeed(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
+	if client.User.ID == "" {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "NOT_JOINED", Message: "ต้องส่ง join ก่อน"})
+		return
+	}
+	var payload struct {
+		Speed float64 `json:"speed"`
+	}
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		return
+	}
+	// รับค่าที่ YouTube IFrame API รองรับ: 0.25, 0.5, 1, 1.5, 2
+	allowed := map[float64]bool{0.25: true, 0.5: true, 1: true, 1.5: true, 2: true}
+	if !allowed[payload.Speed] {
+		return
+	}
+	log.Info().Str("room_id", client.RoomID).Float64("speed", payload.Speed).Msg("playback speed changed")
+	h.BroadcastToRoom(client.RoomID, "playback_speed_updated", map[string]float64{"speed": payload.Speed})
+}
+
 // fetchHistoryOrEmpty ดึง History จาก Store คืน slice ว่างถ้า error
 func fetchHistoryOrEmpty(ctx context.Context, s store.Store, roomID string) []model.HistorySong {
 	history, err := s.GetHistory(ctx, roomID)

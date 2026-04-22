@@ -126,6 +126,8 @@ func main() {
 			controller.HandleSkipSong(h, client, msg.Payload)
 		case "set_playback_mode":
 			controller.HandleSetPlaybackMode(h, client, msg.Payload)
+		case "set_playback_speed":
+			controller.HandleSetPlaybackSpeed(h, client, msg.Payload)
 		case "join":
 			controller.HandleJoin(h, client, msg.Payload)
 		case "send_message":
