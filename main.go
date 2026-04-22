@@ -165,9 +165,9 @@ func main() {
 	seekTicker.Start()
 	defer seekTicker.Stop()
 
-	cleanupStop := make(chan struct{})
-	go startDailyCleanup(redisStore, cleanupStop)
-	defer close(cleanupStop)
+	// cleanupStop := make(chan struct{})
+	// go startDailyCleanup(redisStore, cleanupStop)
+	// defer close(cleanupStop)
 
 	// Setup Melody (WebSocket)
 	m := melody.New()
