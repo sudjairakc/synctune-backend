@@ -194,6 +194,17 @@ func (h *Hub) OnlineUsersInRoom(roomID string) []model.User {
 	return users
 }
 
+// SendToClient ส่ง Event ไปยัง Client ที่ระบุด้วย clientID
+func (h *Hub) SendToClient(clientID, event string, payload interface{}) {
+	h.mu.RLock()
+	client, ok := h.clients[clientID]
+	h.mu.RUnlock()
+	if !ok {
+		return
+	}
+	h.SendToSession(client.Conn, event, payload)
+}
+
 // ActiveRooms คืน slice ของ roomID ที่มี Client อยู่ในขณะนี้
 func (h *Hub) ActiveRooms() []string {
 	h.mu.RLock()

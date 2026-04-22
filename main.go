@@ -130,6 +130,18 @@ func main() {
 			controller.HandleJoin(h, client, msg.Payload)
 		case "send_message":
 			controller.HandleSendMessage(h, client, msg.Payload)
+		case "voice_start":
+			controller.HandleVoiceStart(h, client, msg.Payload)
+		case "voice_stop":
+			controller.HandleVoiceStop(h, client, msg.Payload)
+		case "voice_join":
+			controller.HandleVoiceJoin(h, client, msg.Payload)
+		case "voice_offer":
+			controller.HandleVoiceOffer(h, client, msg.Payload)
+		case "voice_answer":
+			controller.HandleVoiceAnswer(h, client, msg.Payload)
+		case "voice_ice":
+			controller.HandleVoiceICE(h, client, msg.Payload)
 		default:
 			log.Warn().Str("event", msg.Event).Msg("unknown event received")
 		}
