@@ -61,8 +61,9 @@ type roomJoinedPayload struct {
 	History      []model.HistorySong   `json:"history"`
 	ChatHistory  []model.ChatMessage   `json:"chat_history"`
 	OnlineUsers   []model.User          `json:"online_users"`
-	SoundPad      []*model.SoundPadSlot `json:"sound_pad"`
-	PlaybackSpeed float64               `json:"playback_speed"`
+	SoundPad        []*model.SoundPadSlot      `json:"sound_pad"`
+	SoundPadHistory []model.SoundPadPlayEvent  `json:"soundpad_history"`
+	PlaybackSpeed   float64                    `json:"playback_speed"`
 }
 
 // playbackModePayload คือ Payload ของ event playback_mode_updated
@@ -113,7 +114,7 @@ func BroadcastSongSkipped(h hubInterface, roomID string, song model.Song, errorC
 }
 
 // SendRoomJoined ส่ง event "room_joined" ไปยัง Client ที่เพิ่ง join (ไม่ Broadcast)
-func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot) {
+func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot, soundPadHistory []model.SoundPadPlayEvent) {
 	speed := state.PlaybackSpeed
 	if speed == 0 {
 		speed = 1
@@ -130,8 +131,9 @@ func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, stat
 		History:       history,
 		ChatHistory:   chatHistory,
 		OnlineUsers:   onlineUsers,
-		SoundPad:      soundPad,
-		PlaybackSpeed: speed,
+		SoundPad:        soundPad,
+		SoundPadHistory: soundPadHistory,
+		PlaybackSpeed:   speed,
 	})
 }
 

@@ -439,6 +439,33 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 		log.Error().Err(err).Msg("HandleSongEnded: failed to push history")
 	}
 
+	// broadcast song จบ — restore หรือเล่น broadcast ถัดไป
+	if currentSong.IsBroadcast {
+		state.SeekTime = 0
+		if len(state.BroadcastQueue) > 0 {
+			next := state.BroadcastQueue[0]
+			state.BroadcastQueue = state.BroadcastQueue[1:]
+			state.CurrentQueue = []model.Song{next}
+			state.CurrentIndex = 0
+			state.IsPlaying = true
+		} else {
+			state.IsBroadcasting = false
+			state.CurrentQueue = state.SavedQueue
+			state.CurrentIndex = state.SavedCurrentIndex
+			state.SeekTime = state.SavedSeekTime
+			state.IsPlaying = state.SavedIsPlaying
+			state.SavedQueue = nil
+			state.SavedIsPlaying = false
+		}
+		if err := h.Store().SetState(ctx, roomID, state); err != nil {
+			log.Error().Err(err).Msg("HandleSongEnded(broadcast): failed to set state")
+			return
+		}
+		log.Info().Str("event", "song_ended").Str("room_id", roomID).Str("song_id", currentSong.ID).Bool("is_broadcast", true).Msg("broadcast ended")
+		broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
+		return
+	}
+
 	state.CurrentQueue = append(state.CurrentQueue[:state.CurrentIndex], state.CurrentQueue[state.CurrentIndex+1:]...)
 	state.SeekTime = 0
 

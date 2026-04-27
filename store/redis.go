@@ -29,6 +29,11 @@ func roomChatKey(roomID string) string { return "synctune:room:" + roomID + ":ch
 // roomSoundPadKey คืน Redis key สำหรับ sound pad ของห้องนั้น
 func roomSoundPadKey(roomID string) string { return "synctune:room:" + roomID + ":soundpad" }
 
+// roomSoundPadHistoryKey คืน Redis key สำหรับ soundpad play history ของห้องนั้น
+func roomSoundPadHistoryKey(roomID string) string {
+	return "synctune:room:" + roomID + ":soundpad_history"
+}
+
 // Store กำหนด Interface สำหรับการเข้าถึง Storage
 type Store interface {
 	GetState(ctx context.Context, roomID string) (*model.PlaylistState, error)
@@ -39,6 +44,8 @@ type Store interface {
 	GetChatHistory(ctx context.Context, roomID string) ([]model.ChatMessage, error)
 	GetSoundPad(ctx context.Context, roomID string) ([]*model.SoundPadSlot, error)
 	SetSoundPad(ctx context.Context, roomID string, pad []*model.SoundPadSlot) error
+	PushSoundPadPlay(ctx context.Context, roomID string, event model.SoundPadPlayEvent) error
+	GetSoundPadHistory(ctx context.Context, roomID string) ([]model.SoundPadPlayEvent, error)
 	DeleteRoom(ctx context.Context, roomID string) error
 	FlushAll(ctx context.Context) error
 	// ClaimSongEnded ใช้ SET NX เพื่อ dedup — คืน true ถ้า claim สำเร็จ (ประมวลผลได้)
@@ -206,9 +213,45 @@ func (s *RedisStore) SetSoundPad(ctx context.Context, roomID string, pad []*mode
 	return nil
 }
 
+const maxSoundPadHistory = 100
+
+// PushSoundPadPlay บันทึก soundpad play event ลง history (LPUSH + LTRIM, newest first)
+func (s *RedisStore) PushSoundPadPlay(ctx context.Context, roomID string, event model.SoundPadPlayEvent) error {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("PushSoundPadPlay: marshal: %w", err)
+	}
+	_, err = s.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.LPush(ctx, roomSoundPadHistoryKey(roomID), data)
+		pipe.LTrim(ctx, roomSoundPadHistoryKey(roomID), 0, maxSoundPadHistory-1)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("PushSoundPadPlay: pipeline: %w", err)
+	}
+	return nil
+}
+
+// GetSoundPadHistory ดึง soundpad play history จาก Redis (newest first)
+func (s *RedisStore) GetSoundPadHistory(ctx context.Context, roomID string) ([]model.SoundPadPlayEvent, error) {
+	items, err := s.client.LRange(ctx, roomSoundPadHistoryKey(roomID), 0, maxSoundPadHistory-1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("GetSoundPadHistory: redis LRANGE: %w", err)
+	}
+	events := make([]model.SoundPadPlayEvent, 0, len(items))
+	for _, item := range items {
+		var e model.SoundPadPlayEvent
+		if err := json.Unmarshal([]byte(item), &e); err != nil {
+			continue
+		}
+		events = append(events, e)
+	}
+	return events, nil
+}
+
 // DeleteRoom ลบ Redis keys ทั้งหมดของห้องนั้น
 func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
-	if err := s.client.Del(ctx, roomStateKey(roomID), roomHistoryKey(roomID), roomChatKey(roomID), roomSoundPadKey(roomID)).Err(); err != nil {
+	if err := s.client.Del(ctx, roomStateKey(roomID), roomHistoryKey(roomID), roomChatKey(roomID), roomSoundPadKey(roomID), roomSoundPadHistoryKey(roomID)).Err(); err != nil {
 		return fmt.Errorf("DeleteRoom: %w", err)
 	}
 	return nil

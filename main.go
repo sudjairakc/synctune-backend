@@ -14,6 +14,7 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/synctune/backend/broadcast"
 	"github.com/synctune/backend/config"
 	"github.com/synctune/backend/controller"
 	"github.com/synctune/backend/hub"
@@ -164,6 +165,10 @@ func main() {
 	)
 	seekTicker.Start()
 	defer seekTicker.Stop()
+
+	broadcastStop := make(chan struct{})
+	broadcast.Start(h, redisStore, broadcastStop)
+	defer close(broadcastStop)
 
 	// cleanupStop := make(chan struct{})
 	// go startDailyCleanup(redisStore, cleanupStop)

@@ -4,6 +4,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"time"
 	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
@@ -111,7 +112,25 @@ func HandleSoundPadPlay(h *hub.Hub, client *hub.Client, rawPayload json.RawMessa
 	if err != nil || pad[payload.Slot] == nil {
 		return
 	}
-	videoID := pad[payload.Slot].VideoID
-	log.Info().Str("room_id", client.RoomID).Int("slot", payload.Slot).Str("video_id", videoID).Msg("soundpad play triggered")
-	broadcaster.BroadcastSoundPadPlay(h, client.RoomID, payload.Slot, videoID, client.ID)
+	slot := pad[payload.Slot]
+	log.Info().
+		Str("room_id", client.RoomID).
+		Str("username", client.User.Username).
+		Int("slot", payload.Slot).
+		Str("video_id", slot.VideoID).
+		Str("title", slot.Title).
+		Msg("soundpad play triggered")
+
+	ev := model.SoundPadPlayEvent{
+		Slot:      payload.Slot,
+		VideoID:   slot.VideoID,
+		Title:     slot.Title,
+		PlayedBy:  client.User.Username,
+		UserID:    client.User.ID,
+		Timestamp: time.Now().UnixMilli(),
+	}
+	if err := h.Store().PushSoundPadPlay(ctx, client.RoomID, ev); err != nil {
+		log.Error().Err(err).Msg("HandleSoundPadPlay: failed to push history")
+	}
+	broadcaster.BroadcastSoundPadPlay(h, client.RoomID, payload.Slot, slot.VideoID, client.ID)
 }
