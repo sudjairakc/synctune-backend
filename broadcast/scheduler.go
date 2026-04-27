@@ -28,7 +28,18 @@ type Schedule struct {
 // Schedules — hardcode broadcast schedules ที่นี่
 // ตัวอย่าง: {CronExpr: "58 17 * * *", YoutubeURL: "https://youtu.be/dQw4w9WgXcQ"}
 var Schedules = []Schedule{
-	{CronExpr: "40 21 * * *", YoutubeURL: "https://www.youtube.com/watch?v=zAoAmlZRQfc"},
+	{CronExpr: "58 07 * * *", YoutubeURL: "https://www.youtube.com/watch?v=kvfblcLVxlo"}, //เพลงชาติไทย
+	{CronExpr: "58 08 * * *", YoutubeURL: "https://www.youtube.com/watch?v=nrVrZau7M1M"}, // กสิกร
+	{CronExpr: "58 09 * * *", YoutubeURL: "https://www.youtube.com/watch?v=j_k-aTGiwAI"}, // สีคอลลีน
+	{CronExpr: "58 10 * * *", YoutubeURL: "https://www.youtube.com/watch?v=QWKn1dJv8Cg"}, // น้ำทิพย์
+	{CronExpr: "58 11 * * *", YoutubeURL: "https://www.youtube.com/watch?v=8OwzJoECXJw"}, // ซาร่า
+	{CronExpr: "30 12 * * *", YoutubeURL: "https://www.youtube.com/watch?v=Cfq1-Ryt4_s"}, // กินข้าว
+	{CronExpr: "58 12 * * *", YoutubeURL: "https://www.youtube.com/watch?v=YH7bC7_f_1s"}, // ไลโอ
+	{CronExpr: "58 13 * * *", YoutubeURL: "https://www.youtube.com/watch?v=bTNhluU-bdk"}, // ข้าวแสนดี
+	{CronExpr: "58 14 * * *", YoutubeURL: "https://www.youtube.com/watch?v=atEEn01TyUs"}, // protriva
+	{CronExpr: "58 15 * * *", YoutubeURL: "https://www.youtube.com/watch?v=-tjtAC69Wa8"}, // คานิว่า
+	{CronExpr: "58 16 * * *", YoutubeURL: "https://www.youtube.com/watch?v=Ww3wlFzYFx0"}, // บสย.
+	{CronExpr: "58 17 * * *", YoutubeURL: "https://www.youtube.com/watch?v=8VXZKELPo88"}, //เพลงชาติไทย
 }
 
 var videoIDRegex = regexp.MustCompile(`^[\w-]{11}$`)
