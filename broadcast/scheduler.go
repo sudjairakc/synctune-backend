@@ -28,7 +28,7 @@ type Schedule struct {
 // Schedules — hardcode broadcast schedules ที่นี่
 // ตัวอย่าง: {CronExpr: "58 17 * * *", YoutubeURL: "https://youtu.be/dQw4w9WgXcQ"}
 var Schedules = []Schedule{
-	{CronExpr: "21 30 * * *", YoutubeURL: "https://www.youtube.com/watch?v=zAoAmlZRQfc"},
+	{CronExpr: "40 21 * * *", YoutubeURL: "https://www.youtube.com/watch?v=zAoAmlZRQfc"},
 }
 
 var videoIDRegex = regexp.MustCompile(`^[\w-]{11}$`)
