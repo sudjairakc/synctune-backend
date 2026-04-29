@@ -171,6 +171,43 @@ func BroadcastSoundPadPlay(h hubInterface, roomID string, slot int, videoID, use
 	h.BroadcastToRoom(roomID, "soundpad_play", soundPadPlayPayload{Slot: slot, VideoID: videoID, UserID: userID})
 }
 
+// messageDeletedPayload คือ payload ของ event message_deleted
+type messageDeletedPayload struct {
+	MessageID string `json:"message_id"`
+}
+
+// messageReactedPayload คือ payload ของ event message_reacted
+type messageReactedPayload struct {
+	MessageID string              `json:"message_id"`
+	Reactions map[string][]string `json:"reactions"`
+}
+
+// pinsUpdatedPayload คือ payload ของ event pins_updated
+type pinsUpdatedPayload struct {
+	Pins []model.ChatMessage `json:"pins"`
+}
+
+// BroadcastMessageDeleted broadcast event "message_deleted" ไปทุก Client ในห้อง
+func BroadcastMessageDeleted(h hubInterface, roomID, msgID string) {
+	h.BroadcastToRoom(roomID, "message_deleted", messageDeletedPayload{MessageID: msgID})
+}
+
+// BroadcastMessageReacted broadcast event "message_reacted" ไปทุก Client ในห้อง
+func BroadcastMessageReacted(h hubInterface, roomID, msgID string, reactions map[string][]string) {
+	if reactions == nil {
+		reactions = make(map[string][]string)
+	}
+	h.BroadcastToRoom(roomID, "message_reacted", messageReactedPayload{MessageID: msgID, Reactions: reactions})
+}
+
+// BroadcastPinsUpdated broadcast event "pins_updated" ไปทุก Client ในห้อง
+func BroadcastPinsUpdated(h hubInterface, roomID string, pins []model.ChatMessage) {
+	if pins == nil {
+		pins = []model.ChatMessage{}
+	}
+	h.BroadcastToRoom(roomID, "pins_updated", pinsUpdatedPayload{Pins: pins})
+}
+
 // MarshalWSMessage แปลง event + payload เป็น JSON bytes
 func MarshalWSMessage(event string, payload interface{}) ([]byte, error) {
 	raw, err := json.Marshal(payload)

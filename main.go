@@ -164,6 +164,12 @@ func main() {
 			controller.HandleJoin(h, client, msg.Payload)
 		case "send_message":
 			controller.HandleSendMessage(h, client, msg.Payload)
+		case "delete_message":
+			controller.HandleDeleteMessage(h, client, msg.Payload)
+		case "react_message":
+			controller.HandleReactMessage(h, client, msg.Payload)
+		case "pin_message":
+			controller.HandlePinMessage(h, client, msg.Payload)
 		case "voice_start":
 			controller.HandleVoiceStart(h, client, msg.Payload)
 		case "voice_stop":
@@ -207,7 +213,7 @@ func main() {
 
 	// Setup Melody (WebSocket)
 	m := melody.New()
-	m.Config.MaxMessageSize = 4096
+	m.Config.MaxMessageSize = 3 * 1024 * 1024 // 3MB for image support
 
 	m.HandleConnect(func(s *melody.Session) {
 		h.Register(s)

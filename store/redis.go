@@ -26,6 +26,9 @@ func roomHistoryKey(roomID string) string { return "synctune:room:" + roomID + "
 // roomChatKey คืน Redis key สำหรับ chat ของห้องนั้น
 func roomChatKey(roomID string) string { return "synctune:room:" + roomID + ":chat" }
 
+// roomPinsKey คืน Redis key สำหรับ pinned messages ของห้องนั้น
+func roomPinsKey(roomID string) string { return "synctune:room:" + roomID + ":pins" }
+
 // roomSoundPadKey คืน Redis key สำหรับ sound pad ของห้องนั้น
 func roomSoundPadKey(roomID string) string { return "synctune:room:" + roomID + ":soundpad" }
 
@@ -45,6 +48,11 @@ type Store interface {
 	GetHistory(ctx context.Context, roomID string) ([]model.HistorySong, error)
 	PushChatMessage(ctx context.Context, roomID string, msg model.ChatMessage) error
 	GetChatHistory(ctx context.Context, roomID string) ([]model.ChatMessage, error)
+	GetChatMessageByID(ctx context.Context, roomID, msgID string) (*model.ChatMessage, error)
+	DeleteChatMessage(ctx context.Context, roomID, msgID string) error
+	ToggleChatReaction(ctx context.Context, roomID, msgID, emoji, userID string) (map[string][]string, error)
+	GetPinnedMessages(ctx context.Context, roomID string) ([]model.ChatMessage, error)
+	TogglePinMessage(ctx context.Context, roomID string, msg model.ChatMessage) (bool, []model.ChatMessage, error)
 	GetSoundPad(ctx context.Context, roomID string) ([]*model.SoundPadSlot, error)
 	SetSoundPad(ctx context.Context, roomID string, pad []*model.SoundPadSlot) error
 	PushSoundPadPlay(ctx context.Context, roomID string, event model.SoundPadPlayEvent) error
@@ -192,6 +200,152 @@ func (s *RedisStore) GetChatHistory(ctx context.Context, roomID string) ([]model
 	return msgs, nil
 }
 
+// updateChatMessage helper: LRANGE → find by msgID → mutate → LSET
+func (s *RedisStore) updateChatMessage(ctx context.Context, roomID, msgID string, updater func(*model.ChatMessage)) error {
+	key := roomChatKey(roomID)
+	items, err := s.client.LRange(ctx, key, 0, maxChat-1).Result()
+	if err != nil {
+		return fmt.Errorf("updateChatMessage: LRANGE: %w", err)
+	}
+	for i, item := range items {
+		var msg model.ChatMessage
+		if err := json.Unmarshal([]byte(item), &msg); err != nil {
+			continue
+		}
+		if msg.ID != msgID {
+			continue
+		}
+		updater(&msg)
+		data, err := json.Marshal(msg)
+		if err != nil {
+			return fmt.Errorf("updateChatMessage: marshal: %w", err)
+		}
+		if err := s.client.LSet(ctx, key, int64(i), string(data)).Err(); err != nil {
+			return fmt.Errorf("updateChatMessage: LSET: %w", err)
+		}
+		return nil
+	}
+	return fmt.Errorf("updateChatMessage: message not found: %s", msgID)
+}
+
+// GetChatMessageByID ดึง ChatMessage ตาม ID จาก chat history (nil ถ้าไม่พบ)
+func (s *RedisStore) GetChatMessageByID(ctx context.Context, roomID, msgID string) (*model.ChatMessage, error) {
+	items, err := s.client.LRange(ctx, roomChatKey(roomID), 0, maxChat-1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("GetChatMessageByID: LRANGE: %w", err)
+	}
+	for _, item := range items {
+		var msg model.ChatMessage
+		if err := json.Unmarshal([]byte(item), &msg); err != nil {
+			continue
+		}
+		if msg.ID == msgID {
+			return &msg, nil
+		}
+	}
+	return nil, nil
+}
+
+// DeleteChatMessage ทำเครื่องหมาย deleted=true และล้างเนื้อหาข้อความ
+func (s *RedisStore) DeleteChatMessage(ctx context.Context, roomID, msgID string) error {
+	return s.updateChatMessage(ctx, roomID, msgID, func(msg *model.ChatMessage) {
+		msg.Deleted = true
+		msg.Text = ""
+		msg.ImageURL = ""
+	})
+}
+
+// ToggleChatReaction toggle emoji reaction ของ user บนข้อความ คืน reactions map หลัง toggle
+func (s *RedisStore) ToggleChatReaction(ctx context.Context, roomID, msgID, emoji, userID string) (map[string][]string, error) {
+	var result map[string][]string
+	err := s.updateChatMessage(ctx, roomID, msgID, func(msg *model.ChatMessage) {
+		if msg.Reactions == nil {
+			msg.Reactions = make(map[string][]string)
+		}
+		users := msg.Reactions[emoji]
+		removed := false
+		for i, uid := range users {
+			if uid == userID {
+				msg.Reactions[emoji] = append(users[:i], users[i+1:]...)
+				removed = true
+				break
+			}
+		}
+		if !removed {
+			msg.Reactions[emoji] = append(users, userID)
+		}
+		if len(msg.Reactions[emoji]) == 0 {
+			delete(msg.Reactions, emoji)
+		}
+		result = msg.Reactions
+	})
+	return result, err
+}
+
+const maxPins = 20
+
+// GetPinnedMessages ดึง pinned messages ทั้งหมด (newest first)
+func (s *RedisStore) GetPinnedMessages(ctx context.Context, roomID string) ([]model.ChatMessage, error) {
+	items, err := s.client.LRange(ctx, roomPinsKey(roomID), 0, maxPins-1).Result()
+	if err != nil {
+		return nil, fmt.Errorf("GetPinnedMessages: LRANGE: %w", err)
+	}
+	msgs := make([]model.ChatMessage, 0, len(items))
+	for _, item := range items {
+		var msg model.ChatMessage
+		if err := json.Unmarshal([]byte(item), &msg); err != nil {
+			continue
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, nil
+}
+
+// TogglePinMessage pin หรือ unpin ข้อความ คืน (pinned bool, updated pins list, error)
+func (s *RedisStore) TogglePinMessage(ctx context.Context, roomID string, msg model.ChatMessage) (bool, []model.ChatMessage, error) {
+	// ตรวจสอบว่า pin อยู่แล้วหรือไม่
+	existing, err := s.GetPinnedMessages(ctx, roomID)
+	if err != nil {
+		return false, nil, err
+	}
+	for _, p := range existing {
+		if p.ID == msg.ID {
+			// unpin: ลบออก
+			items, err := s.client.LRange(ctx, roomPinsKey(roomID), 0, maxPins-1).Result()
+			if err != nil {
+				return false, nil, fmt.Errorf("TogglePinMessage: LRANGE: %w", err)
+			}
+			for _, item := range items {
+				var m model.ChatMessage
+				if err := json.Unmarshal([]byte(item), &m); err != nil {
+					continue
+				}
+				if m.ID == msg.ID {
+					_ = s.client.LRem(ctx, roomPinsKey(roomID), 0, item).Err()
+					break
+				}
+			}
+			pins, _ := s.GetPinnedMessages(ctx, roomID)
+			return false, pins, nil
+		}
+	}
+	// pin: เพิ่มข้อมูล
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return false, nil, fmt.Errorf("TogglePinMessage: marshal: %w", err)
+	}
+	_, err = s.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.LPush(ctx, roomPinsKey(roomID), data)
+		pipe.LTrim(ctx, roomPinsKey(roomID), 0, maxPins-1)
+		return nil
+	})
+	if err != nil {
+		return false, nil, fmt.Errorf("TogglePinMessage: pipeline: %w", err)
+	}
+	pins, _ := s.GetPinnedMessages(ctx, roomID)
+	return true, pins, nil
+}
+
 // GetSoundPad โหลด Sound Pad ([50]*SoundPadSlot) จาก Redis
 func (s *RedisStore) GetSoundPad(ctx context.Context, roomID string) ([]*model.SoundPadSlot, error) {
 	pad := make([]*model.SoundPadSlot, model.SoundPadSize)
@@ -262,6 +416,7 @@ func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 		roomStateKey(roomID),
 		roomHistoryKey(roomID),
 		roomChatKey(roomID),
+		roomPinsKey(roomID),
 		roomSoundPadKey(roomID),
 		roomSoundPadHistoryKey(roomID),
 		roomLastEmptiedKey(roomID),
