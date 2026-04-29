@@ -34,6 +34,9 @@ func roomSoundPadHistoryKey(roomID string) string {
 	return "synctune:room:" + roomID + ":soundpad_history"
 }
 
+// roomLastEmptiedKey คืน Redis key ที่เก็บ Unix timestamp ตอนห้องว่างล่าสุด
+func roomLastEmptiedKey(roomID string) string { return "synctune:room:" + roomID + ":last_emptied" }
+
 // Store กำหนด Interface สำหรับการเข้าถึง Storage
 type Store interface {
 	GetState(ctx context.Context, roomID string) (*model.PlaylistState, error)
@@ -50,6 +53,10 @@ type Store interface {
 	FlushAll(ctx context.Context) error
 	// ClaimSongEnded ใช้ SET NX เพื่อ dedup — คืน true ถ้า claim สำเร็จ (ประมวลผลได้)
 	ClaimSongEnded(ctx context.Context, roomID, queueID string) (bool, error)
+	// SetRoomLastEmptied บันทึกเวลาที่ห้องว่าง (ไม่มี user) — ใช้คำนวณอายุห้องสำหรับ cleanup
+	SetRoomLastEmptied(ctx context.Context, roomID string) error
+	// ListRoomsLastEmptied คืน map roomID → เวลาที่ห้องว่างล่าสุด สำหรับ cleanup job
+	ListRoomsLastEmptied(ctx context.Context) (map[string]time.Time, error)
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -251,10 +258,56 @@ func (s *RedisStore) GetSoundPadHistory(ctx context.Context, roomID string) ([]m
 
 // DeleteRoom ลบ Redis keys ทั้งหมดของห้องนั้น
 func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
-	if err := s.client.Del(ctx, roomStateKey(roomID), roomHistoryKey(roomID), roomChatKey(roomID), roomSoundPadKey(roomID), roomSoundPadHistoryKey(roomID)).Err(); err != nil {
+	keys := []string{
+		roomStateKey(roomID),
+		roomHistoryKey(roomID),
+		roomChatKey(roomID),
+		roomSoundPadKey(roomID),
+		roomSoundPadHistoryKey(roomID),
+		roomLastEmptiedKey(roomID),
+	}
+	if err := s.client.Del(ctx, keys...).Err(); err != nil {
 		return fmt.Errorf("DeleteRoom: %w", err)
 	}
 	return nil
+}
+
+// SetRoomLastEmptied บันทึก Unix timestamp ปัจจุบันเป็น "เวลาที่ห้องว่าง" สำหรับ cleanup job
+func (s *RedisStore) SetRoomLastEmptied(ctx context.Context, roomID string) error {
+	if err := s.client.Set(ctx, roomLastEmptiedKey(roomID), time.Now().Unix(), 0).Err(); err != nil {
+		return fmt.Errorf("SetRoomLastEmptied: %w", err)
+	}
+	return nil
+}
+
+// ListRoomsLastEmptied สแกน Redis หา rooms ที่มี last_emptied key และคืน map roomID → เวลา
+func (s *RedisStore) ListRoomsLastEmptied(ctx context.Context) (map[string]time.Time, error) {
+	result := make(map[string]time.Time)
+	var cursor uint64
+	for {
+		keys, next, err := s.client.Scan(ctx, cursor, "synctune:room:*:last_emptied", 100).Result()
+		if err != nil {
+			return nil, fmt.Errorf("ListRoomsLastEmptied: scan: %w", err)
+		}
+		for _, key := range keys {
+			// key format: synctune:room:{roomID}:last_emptied
+			parts := strings.SplitN(key, ":", 4)
+			if len(parts) != 4 {
+				continue
+			}
+			roomID := parts[2]
+			ts, err := s.client.Get(ctx, key).Int64()
+			if err != nil {
+				continue
+			}
+			result[roomID] = time.Unix(ts, 0)
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return result, nil
 }
 
 // ClaimSongEnded ใช้ SET NX เพื่อ dedup song_ended per queue_id

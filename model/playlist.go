@@ -11,6 +11,7 @@ type Song struct {
 	AddedBy     string `json:"added_by"`              // ชื่อผู้เพิ่ม
 	Duration    int    `json:"duration"`              // ความยาว (วินาที), 0 = ไม่ทราบ
 	IsBroadcast bool   `json:"is_broadcast,omitempty"` // true = เพลงนี้เป็น scheduled broadcast
+	IsLive      bool   `json:"is_live,omitempty"`      // true = YouTube live stream (ไม่ seek)
 }
 
 // HistorySong แทนเพลงที่เล่นจบแล้วหรือถูก Skip

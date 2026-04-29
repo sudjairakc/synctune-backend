@@ -138,6 +138,7 @@ func HandleAddSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		Title:     meta.Title,
 		Thumbnail: meta.Thumbnail,
 		AddedBy:   addedBy,
+		IsLive:    isLiveYouTubeURL(payload.YoutubeURL),
 	}
 	state.CurrentQueue = append(state.CurrentQueue, song)
 
@@ -629,6 +630,8 @@ func extractVideoID(rawURL string) (string, error) {
 	case "www.youtube.com", "youtube.com", "m.youtube.com", "music.youtube.com":
 		if id, ok := strings.CutPrefix(u.Path, "/shorts/"); ok {
 			videoID = id
+		} else if id, ok := strings.CutPrefix(u.Path, "/live/"); ok {
+			videoID = id
 		} else {
 			videoID = u.Query().Get("v")
 		}
@@ -647,6 +650,14 @@ func extractVideoID(rawURL string) (string, error) {
 func isValidYouTubeURL(rawURL string) bool {
 	_, err := extractVideoID(rawURL)
 	return err == nil
+}
+
+func isLiveYouTubeURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(u.Path, "/live/")
 }
 
 // findSongIndex หา Index ของ Song ใน Queue จาก QueueID

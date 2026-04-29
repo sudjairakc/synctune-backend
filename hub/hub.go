@@ -144,11 +144,11 @@ func (h *Hub) Unregister(session *melody.Session) {
 	log.Info().Str("client_id", clientID).Str("username", client.User.Username).Str("room_id", roomID).Msg("client disconnected")
 
 	if roomEmpty {
-		// ห้องว่าง → ลบ Redis keys
-		if err := h.store.DeleteRoom(context.Background(), roomID); err != nil {
-			log.Error().Err(err).Str("room_id", roomID).Msg("failed to delete room from redis")
+		// ห้องว่าง → บันทึกเวลาไว้ให้ cleanup job ตรวจ (ไม่ลบทันที)
+		if err := h.store.SetRoomLastEmptied(context.Background(), roomID); err != nil {
+			log.Error().Err(err).Str("room_id", roomID).Msg("failed to set room last_emptied")
 		} else {
-			log.Info().Str("room_id", roomID).Msg("room closed (no more clients)")
+			log.Info().Str("room_id", roomID).Msg("room empty, marked for deferred cleanup")
 		}
 	} else if client.User.ID != "" && roomID != "" {
 		// ยังมีคนอยู่ในห้อง → broadcast user_left

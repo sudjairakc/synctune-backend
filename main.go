@@ -68,25 +68,56 @@ func corsMiddleware(allowedOrigins string, next http.Handler) http.Handler {
 	})
 }
 
-// startDailyCleanup รัน goroutine ที่ flush Redis ทุกวันเวลา 06:00 Asia/Bangkok
-func startDailyCleanup(s store.Store, stopCh <-chan struct{}) {
+const roomMaxAge = 5 * 24 * time.Hour
+
+// startRoomCleanup รัน goroutine ที่ลบห้องที่ว่างมากกว่า 5 วัน ทุกวันเวลาตี 4 Asia/Bangkok
+func startRoomCleanup(h *hub.Hub, s store.Store, stopCh <-chan struct{}) {
 	for {
 		now := time.Now().In(bangkokLoc)
-		next := time.Date(now.Year(), now.Month(), now.Day(), 6, 0, 0, 0, bangkokLoc)
+		next := time.Date(now.Year(), now.Month(), now.Day(), 4, 0, 0, 0, bangkokLoc)
 		if !next.After(now) {
 			next = next.Add(24 * time.Hour)
 		}
 		select {
 		case <-time.After(time.Until(next)):
-			if err := s.FlushAll(context.Background()); err != nil {
-				log.Error().Err(err).Msg("daily cleanup: failed to flush redis")
-			} else {
-				log.Info().Str("time", next.Format(time.RFC3339)).Msg("daily cleanup: redis flushed")
-			}
+			runRoomCleanup(h, s)
 		case <-stopCh:
 			return
 		}
 	}
+}
+
+func runRoomCleanup(h *hub.Hub, s store.Store) {
+	ctx := context.Background()
+
+	emptied, err := s.ListRoomsLastEmptied(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("room cleanup: failed to list rooms")
+		return
+	}
+
+	// ห้องที่มี client อยู่ตอนนี้ → ข้าม แม้จะมี last_emptied เก่าอยู่
+	activeRooms := make(map[string]bool, len(h.ActiveRooms()))
+	for _, id := range h.ActiveRooms() {
+		activeRooms[id] = true
+	}
+
+	cutoff := time.Now().Add(-roomMaxAge)
+	deleted := 0
+	for roomID, lastEmptied := range emptied {
+		if activeRooms[roomID] {
+			continue
+		}
+		if lastEmptied.Before(cutoff) {
+			if err := s.DeleteRoom(ctx, roomID); err != nil {
+				log.Error().Err(err).Str("room_id", roomID).Msg("room cleanup: failed to delete room")
+				continue
+			}
+			deleted++
+			log.Info().Str("room_id", roomID).Str("last_emptied", lastEmptied.Format(time.RFC3339)).Msg("room cleanup: deleted expired room")
+		}
+	}
+	log.Info().Int("deleted", deleted).Int("checked", len(emptied)).Msg("room cleanup: done")
 }
 
 func main() {
@@ -170,9 +201,9 @@ func main() {
 	broadcast.Start(h, redisStore, broadcastStop)
 	defer close(broadcastStop)
 
-	// cleanupStop := make(chan struct{})
-	// go startDailyCleanup(redisStore, cleanupStop)
-	// defer close(cleanupStop)
+	cleanupStop := make(chan struct{})
+	go startRoomCleanup(h, redisStore, cleanupStop)
+	defer close(cleanupStop)
 
 	// Setup Melody (WebSocket)
 	m := melody.New()

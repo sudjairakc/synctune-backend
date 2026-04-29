@@ -73,6 +73,11 @@ func (t *SeekTicker) tick() {
 			continue
 		}
 
+		// live stream ไม่มี seekTime ที่มีความหมาย — ข้ามเพื่อไม่ให้ SeekTime โตไม่หยุด
+		if state.CurrentIndex < len(state.CurrentQueue) && state.CurrentQueue[state.CurrentIndex].IsLive {
+			continue
+		}
+
 		state.SeekTime += int(t.interval.Seconds())
 
 		if err := t.store.SetState(ctx, roomID, state); err != nil {
