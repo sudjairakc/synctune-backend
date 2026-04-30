@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog/log"
@@ -17,6 +18,9 @@ import (
 	"github.com/synctune/backend/store"
 	"github.com/synctune/backend/youtube"
 )
+
+// เมิน song_ended ของคลิป broadcast ถ้าเริ่มเล่นจริงในเชิง wall clock ได้ไม่เกินเท่านี้ (กัน client ส่ง ENDED จากคนละวิดีโอใน iframe)
+const minBroadcastWallBeforeSongEndedSec int64 = 4
 
 // addSongPayload คือ Payload ของ event add_song
 type addSongPayload struct {
@@ -319,8 +323,10 @@ func HandleReportError(h *hub.Hub, client *hub.Client, rawPayload json.RawMessag
 			state.CurrentQueue = []model.Song{next}
 			state.CurrentIndex = 0
 			state.IsPlaying = true
+			state.BroadcastPlaybackStartedUnix = time.Now().Unix()
 		} else {
 			state.IsBroadcasting = false
+			state.BroadcastPlaybackStartedUnix = 0
 			state.CurrentQueue = state.SavedQueue
 			state.CurrentIndex = state.SavedCurrentIndex
 			state.SeekTime = state.SavedSeekTime
@@ -452,6 +458,15 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 		return
 	}
 
+	if currentSong.IsBroadcast && state.BroadcastPlaybackStartedUnix > 0 {
+		since := time.Now().Unix() - state.BroadcastPlaybackStartedUnix
+		if since < minBroadcastWallBeforeSongEndedSec {
+			log.Debug().Str("room_id", roomID).Str("queue_id", currentSong.QueueID).Int64("since_started_sec", since).
+				Msg("HandleSongEnded: broadcast song_ended ignored (too soon after segment start)")
+			return
+		}
+	}
+
 	claimed, err := h.Store().ClaimSongEnded(ctx, roomID, currentSong.QueueID)
 	if err != nil {
 		log.Error().Err(err).Msg("HandleSongEnded: failed to claim")
@@ -475,8 +490,10 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 			state.CurrentQueue = []model.Song{next}
 			state.CurrentIndex = 0
 			state.IsPlaying = true
+			state.BroadcastPlaybackStartedUnix = time.Now().Unix()
 		} else {
 			state.IsBroadcasting = false
+			state.BroadcastPlaybackStartedUnix = 0
 			state.CurrentQueue = state.SavedQueue
 			state.CurrentIndex = state.SavedCurrentIndex
 			state.SeekTime = state.SavedSeekTime

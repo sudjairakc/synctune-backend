@@ -226,6 +226,7 @@ func triggerInRoom(h *hub.Hub, s store.Store, roomID string, song model.Song) {
 	state.CurrentIndex = 0
 	state.SeekTime = 0
 	state.IsPlaying = true
+	state.BroadcastPlaybackStartedUnix = time.Now().Unix()
 
 	if err := s.SetState(ctx, roomID, state); err != nil {
 		log.Error().Err(err).Str("room_id", roomID).Msg("broadcast: failed to set state")
@@ -247,6 +248,7 @@ func restoreSavedState(h *hub.Hub, s store.Store, roomID string, state *model.Pl
 	state.IsPlaying = state.SavedIsPlaying
 	state.IsBroadcasting = false
 	state.BroadcastQueue = nil
+	state.BroadcastPlaybackStartedUnix = 0
 	state.SavedQueue = nil
 
 	if err := s.SetState(ctx, roomID, state); err != nil {
