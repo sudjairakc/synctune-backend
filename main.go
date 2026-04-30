@@ -14,11 +14,13 @@ import (
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 
+	"github.com/synctune/backend/admin"
 	"github.com/synctune/backend/broadcast"
 	"github.com/synctune/backend/config"
 	"github.com/synctune/backend/controller"
 	"github.com/synctune/backend/hub"
 	"github.com/synctune/backend/model"
+	"github.com/synctune/backend/promptpay"
 	"github.com/synctune/backend/store"
 	"github.com/synctune/backend/ticker"
 )
@@ -204,7 +206,7 @@ func main() {
 	defer seekTicker.Stop()
 
 	broadcastStop := make(chan struct{})
-	broadcast.Start(h, redisStore, broadcastStop)
+	scheduler := broadcast.Start(h, redisStore, broadcastStop)
 	defer close(broadcastStop)
 
 	cleanupStop := make(chan struct{})
@@ -248,6 +250,20 @@ func main() {
 			"active_rooms":       h.RoomCount(),
 		})
 	})
+
+	mux.HandleFunc("/qr/promptpay", func(w http.ResponseWriter, r *http.Request) {
+		png, err := promptpay.QRPng(cfg.PromptPayPhone, 0)
+		if err != nil {
+			http.Error(w, "failed to generate QR", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		_, _ = w.Write(png)
+	})
+
+	adminHandler := admin.New(h, redisStore, scheduler, cfg.AdminToken)
+	adminHandler.Register(mux)
 
 	srv := &http.Server{
 		Addr:    ":" + cfg.Port,

@@ -30,6 +30,7 @@ type hubInterface interface {
 type queueUpdatedPayload struct {
 	CurrentQueue []model.Song        `json:"current_queue"`
 	CurrentIndex int                 `json:"current_index"`
+	SeekTime     int                 `json:"seek_time"`
 	IsPlaying    bool                `json:"is_playing"`
 	History      []model.HistorySong `json:"history"`
 }
@@ -84,6 +85,7 @@ func BroadcastQueueUpdated(h hubInterface, roomID string, state *model.PlaylistS
 	h.BroadcastToRoom(roomID, "queue_updated", queueUpdatedPayload{
 		CurrentQueue: state.CurrentQueue,
 		CurrentIndex: state.CurrentIndex,
+		SeekTime:     state.SeekTime,
 		IsPlaying:    state.IsPlaying,
 		History:      history,
 	})

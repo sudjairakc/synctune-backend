@@ -70,3 +70,12 @@ type WSError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 }
+
+// BroadcastSchedule คือ 1 รายการ broadcast schedule ที่เก็บใน Redis
+type BroadcastSchedule struct {
+	ID         string `json:"id"`          // UUID
+	CronExpr   string `json:"cron_expr"`   // "MIN HOUR * * *" (Asia/Bangkok)
+	YoutubeURL string `json:"youtube_url"`
+	Label      string `json:"label"`       // ชื่อแสดงผล (optional)
+	Enabled    bool   `json:"enabled"`
+}

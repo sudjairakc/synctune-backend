@@ -277,6 +277,42 @@ func (h *Hub) RoomCount() int {
 	return len(h.rooms)
 }
 
+// RoomDetail แทนข้อมูลห้องสำหรับ admin
+type RoomDetail struct {
+	RoomID  string       `json:"room_id"`
+	Users   []model.User `json:"users"`
+}
+
+// RoomsDetail คืนรายละเอียดทุกห้องสำหรับ admin
+func (h *Hub) RoomsDetail() []RoomDetail {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	rooms := make([]RoomDetail, 0, len(h.rooms))
+	for roomID, clients := range h.rooms {
+		users := make([]model.User, 0, len(clients))
+		for _, c := range clients {
+			if c.User.ID != "" {
+				users = append(users, c.User)
+			}
+		}
+		rooms = append(rooms, RoomDetail{RoomID: roomID, Users: users})
+	}
+	return rooms
+}
+
+// KickClient ตัด connection ของ client ออกจาก hub ด้วย clientID
+// คืน false ถ้าไม่พบ client
+func (h *Hub) KickClient(clientID string) bool {
+	h.mu.RLock()
+	client, ok := h.clients[clientID]
+	h.mu.RUnlock()
+	if !ok {
+		return false
+	}
+	client.Conn.Close()
+	return true
+}
+
 // sessionClientID ดึง client_id จาก session (set ตอน Register)
 func (h *Hub) sessionClientID(session *melody.Session) string {
 	val, exists := session.Get("client_id")

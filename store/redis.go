@@ -65,6 +65,10 @@ type Store interface {
 	SetRoomLastEmptied(ctx context.Context, roomID string) error
 	// ListRoomsLastEmptied คืน map roomID → เวลาที่ห้องว่างล่าสุด สำหรับ cleanup job
 	ListRoomsLastEmptied(ctx context.Context) (map[string]time.Time, error)
+	// GetSchedules คืน broadcast schedules ทั้งหมด
+	GetSchedules(ctx context.Context) ([]model.BroadcastSchedule, error)
+	// SetSchedules บันทึก broadcast schedules ลง Redis
+	SetSchedules(ctx context.Context, schedules []model.BroadcastSchedule) error
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -497,6 +501,36 @@ func (s *RedisStore) FlushAll(ctx context.Context) error {
 	}
 	if err := s.client.Del(ctx, keys...).Err(); err != nil {
 		return fmt.Errorf("FlushAll: del: %w", err)
+	}
+	return nil
+}
+
+const broadcastSchedulesKey = "synctune:broadcast:schedules"
+
+// GetSchedules คืน broadcast schedules ทั้งหมดจาก Redis
+func (s *RedisStore) GetSchedules(ctx context.Context) ([]model.BroadcastSchedule, error) {
+	data, err := s.client.Get(ctx, broadcastSchedulesKey).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return []model.BroadcastSchedule{}, nil
+		}
+		return nil, fmt.Errorf("GetSchedules: redis GET: %w", err)
+	}
+	var schedules []model.BroadcastSchedule
+	if err := json.Unmarshal(data, &schedules); err != nil {
+		return nil, fmt.Errorf("GetSchedules: unmarshal: %w", err)
+	}
+	return schedules, nil
+}
+
+// SetSchedules บันทึก broadcast schedules ลง Redis
+func (s *RedisStore) SetSchedules(ctx context.Context, schedules []model.BroadcastSchedule) error {
+	data, err := json.Marshal(schedules)
+	if err != nil {
+		return fmt.Errorf("SetSchedules: marshal: %w", err)
+	}
+	if err := s.client.Set(ctx, broadcastSchedulesKey, data, 0).Err(); err != nil {
+		return fmt.Errorf("SetSchedules: redis SET: %w", err)
 	}
 	return nil
 }
