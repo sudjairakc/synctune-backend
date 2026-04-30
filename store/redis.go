@@ -124,7 +124,22 @@ func (s *RedisStore) GetState(ctx context.Context, roomID string) (*model.Playli
 			state.CurrentQueue[i].QueueID = state.CurrentQueue[i].ID + fmt.Sprintf("_%d", i)
 		}
 	}
+	normalizeSeekTimeForLiveTrack(&state)
 	return &state, nil
+}
+
+// normalizeSeekTimeForLiveTrack วิดีโอสดไม่ควรใช้ seek_time จาก VoD — คืน 0 ใน state ที่โหลด (ไม่เขียน Redis ทันที)
+func normalizeSeekTimeForLiveTrack(state *model.PlaylistState) {
+	if len(state.CurrentQueue) == 0 {
+		return
+	}
+	i := state.CurrentIndex
+	if i < 0 || i >= len(state.CurrentQueue) {
+		return
+	}
+	if state.CurrentQueue[i].IsLive {
+		state.SeekTime = 0
+	}
 }
 
 // SetState บันทึก PlaylistState ลง Redis

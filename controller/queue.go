@@ -700,7 +700,16 @@ func isLiveYouTubeURL(rawURL string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.HasPrefix(u.Path, "/live/")
+	// เช่น /live/VIDEO_ID หรือ /channel/.../live
+	if strings.Contains(u.Path, "/live") {
+		return true
+	}
+	switch u.Query().Get("live") {
+	case "1", "true", "yes":
+		return true
+	default:
+		return false
+	}
 }
 
 // findSongIndex หา Index ของ Song ใน Queue จาก QueueID
