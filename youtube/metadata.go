@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 )
 
@@ -15,12 +16,14 @@ var httpClient = &http.Client{Timeout: 5 * time.Second}
 type VideoMetadata struct {
 	Title     string
 	Thumbnail string
+	// LikelyBroadcastLive จากชื่อใน oEmbed (เช่น "🔴LIVE : …") — watch?v= ไม่เข้าข่าย URL /live/ ได้
+	LikelyBroadcastLive bool
 }
 
 // oEmbedResponse คือ Response จาก YouTube oEmbed API
 type oEmbedResponse struct {
-	Title         string `json:"title"`
-	ThumbnailURL  string `json:"thumbnail_url"`
+	Title        string `json:"title"`
+	ThumbnailURL string `json:"thumbnail_url"`
 }
 
 // FetchMetadata ดึง Title และ Thumbnail จาก YouTube Video ID
@@ -32,7 +35,31 @@ func FetchMetadata(videoID string) (*VideoMetadata, error) {
 		return nil, err
 	}
 	thumbnail := resolveThumbnail(videoID)
-	return &VideoMetadata{Title: title, Thumbnail: thumbnail}, nil
+	return &VideoMetadata{
+		Title:               title,
+		Thumbnail:           thumbnail,
+		LikelyBroadcastLive: LikelyBroadcastLiveFromOEmbedTitle(title),
+	}, nil
+}
+
+// LikelyBroadcastLiveFromOEmbedTitle ใช้ title จาก oEmbed ช่วยเดาทีวีถ่ายทอดสด (ไม่เรียก Data API)
+func LikelyBroadcastLiveFromOEmbedTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return false
+	}
+	up := strings.ToUpper(title)
+	// ผู้เล่นหลายช่องในไทยใส่ "🔴" + "LIVE" ใน title
+	if strings.Contains(title, "🔴") && strings.Contains(up, "LIVE") {
+		return true
+	}
+	if strings.Contains(up, " LIVE:") || strings.Contains(up, " LIVE :") {
+		return true
+	}
+	if strings.Contains(title, "ถ่ายทอดสด") {
+		return true
+	}
+	return false
 }
 
 func fetchTitle(videoID string) (string, error) {

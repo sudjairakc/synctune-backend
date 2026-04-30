@@ -142,7 +142,7 @@ func HandleAddSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		Title:     meta.Title,
 		Thumbnail: meta.Thumbnail,
 		AddedBy:   addedBy,
-		IsLive:    isLiveYouTubeURL(payload.YoutubeURL),
+		IsLive:    isLiveYouTubeURL(payload.YoutubeURL) || meta.LikelyBroadcastLive,
 	}
 	state.CurrentQueue = append(state.CurrentQueue, song)
 
