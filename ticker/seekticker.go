@@ -63,28 +63,14 @@ func (t *SeekTicker) run() {
 func (t *SeekTicker) tick() {
 	ctx := context.Background()
 	for _, roomID := range t.hub.ActiveRooms() {
-		state, err := t.store.GetState(ctx, roomID)
+		newSeek, err := t.store.IncrSeekTime(ctx, roomID, int(t.interval.Seconds()))
 		if err != nil {
-			log.Error().Err(err).Str("room_id", roomID).Msg("SeekTicker: failed to get state")
+			log.Error().Err(err).Str("room_id", roomID).Msg("SeekTicker: failed to incr seek time")
 			continue
 		}
-
-		if !state.IsPlaying {
+		if newSeek < 0 {
 			continue
 		}
-
-		// live stream ไม่มี seekTime ที่มีความหมาย — ข้ามเพื่อไม่ให้ SeekTime โตไม่หยุด
-		if state.CurrentIndex < len(state.CurrentQueue) && state.CurrentQueue[state.CurrentIndex].IsLive {
-			continue
-		}
-
-		state.SeekTime += int(t.interval.Seconds())
-
-		if err := t.store.SetState(ctx, roomID, state); err != nil {
-			log.Error().Err(err).Str("room_id", roomID).Msg("SeekTicker: failed to set state")
-			continue
-		}
-
-		broadcaster.BroadcastSeekSync(t.hub, roomID, state.SeekTime, state.IsPlaying)
+		broadcaster.BroadcastSeekSync(t.hub, roomID, newSeek, true)
 	}
 }

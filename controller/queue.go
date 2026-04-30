@@ -311,6 +311,32 @@ func HandleReportError(h *hub.Hub, client *hub.Client, rawPayload json.RawMessag
 
 	broadcaster.BroadcastSongSkipped(h, roomID, currentSong, payload.ErrorCode)
 
+	if currentSong.IsBroadcast {
+		state.SeekTime = 0
+		if len(state.BroadcastQueue) > 0 {
+			next := state.BroadcastQueue[0]
+			state.BroadcastQueue = state.BroadcastQueue[1:]
+			state.CurrentQueue = []model.Song{next}
+			state.CurrentIndex = 0
+			state.IsPlaying = true
+		} else {
+			state.IsBroadcasting = false
+			state.CurrentQueue = state.SavedQueue
+			state.CurrentIndex = state.SavedCurrentIndex
+			state.SeekTime = state.SavedSeekTime
+			state.IsPlaying = state.SavedIsPlaying
+			state.SavedQueue = nil
+			state.SavedIsPlaying = false
+		}
+		if err := h.Store().SetState(ctx, roomID, state); err != nil {
+			log.Error().Err(err).Msg("HandleReportError(broadcast): failed to set state")
+			return
+		}
+		log.Info().Str("event", "report_error").Str("room_id", roomID).Str("song_id", payload.SongID).Int("error_code", payload.ErrorCode).Bool("is_broadcast", true).Msg("broadcast skipped due to error")
+		broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
+		return
+	}
+
 	state.CurrentQueue = append(state.CurrentQueue[:state.CurrentIndex], state.CurrentQueue[state.CurrentIndex+1:]...)
 	state.SeekTime = 0
 

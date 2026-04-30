@@ -69,6 +69,9 @@ type Store interface {
 	GetSchedules(ctx context.Context) ([]model.BroadcastSchedule, error)
 	// SetSchedules บันทึก broadcast schedules ลง Redis
 	SetSchedules(ctx context.Context, schedules []model.BroadcastSchedule) error
+	// IncrSeekTime เพิ่ม SeekTime แบบ atomic ด้วย Lua script
+	// คืน seek_time ใหม่, หรือ -1 ถ้าห้องไม่ได้เล่นหรือเป็น live stream
+	IncrSeekTime(ctx context.Context, roomID string, delta int) (int, error)
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -503,6 +506,31 @@ func (s *RedisStore) FlushAll(ctx context.Context) error {
 		return fmt.Errorf("FlushAll: del: %w", err)
 	}
 	return nil
+}
+
+// incrSeekScript เพิ่ม seek_time แบบ atomic ใน Redis ด้วย Lua
+// ป้องกัน race condition กับ triggerInRoom ที่ reset seek_time=0
+var incrSeekScript = redis.NewScript(`
+local data = redis.call('GET', KEYS[1])
+if not data then return -1 end
+local state = cjson.decode(data)
+if not state.is_playing then return -1 end
+local idx = (state.current_index or 0) + 1
+local queue = state.current_queue or {}
+if queue[idx] and queue[idx].is_live then return -1 end
+local seek = (state.seek_time or 0) + tonumber(ARGV[1])
+state.seek_time = seek
+redis.call('SET', KEYS[1], cjson.encode(state))
+return seek
+`)
+
+// IncrSeekTime เพิ่ม seek_time แบบ atomic — คืน -1 ถ้าห้องไม่ได้เล่นหรือเป็น live stream
+func (s *RedisStore) IncrSeekTime(ctx context.Context, roomID string, delta int) (int, error) {
+	result, err := incrSeekScript.Run(ctx, s.client, []string{roomStateKey(roomID)}, delta).Int()
+	if err != nil {
+		return 0, fmt.Errorf("IncrSeekTime: %w", err)
+	}
+	return result, nil
 }
 
 const broadcastSchedulesKey = "synctune:broadcast:schedules"
