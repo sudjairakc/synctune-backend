@@ -144,8 +144,26 @@ func (h *Hub) Unregister(session *melody.Session) {
 	log.Info().Str("client_id", clientID).Str("username", client.User.Username).Str("room_id", roomID).Msg("client disconnected")
 
 	if roomEmpty {
-		// ห้องว่าง → บันทึกเวลาไว้ให้ cleanup job ตรวจ (ไม่ลบทันที)
-		if err := h.store.SetRoomLastEmptied(context.Background(), roomID); err != nil {
+		ctx := context.Background()
+		// ห้องว่าง — ถ้า broadcast ค้างอยู่ให้ reset ทันที เพราะไม่มีใคร consume song_ended แล้ว
+		if state, err := h.store.GetState(ctx, roomID); err == nil && state.IsBroadcasting {
+			state.IsBroadcasting = false
+			state.BroadcastQueue = nil
+			state.BroadcastPlaybackStartedUnix = 0
+			state.CurrentQueue = state.SavedQueue
+			state.CurrentIndex = state.SavedCurrentIndex
+			state.SeekTime = state.SavedSeekTime
+			state.IsPlaying = state.SavedIsPlaying
+			state.SavedQueue = nil
+			state.SavedIsPlaying = false
+			if err := h.store.SetState(ctx, roomID, state); err != nil {
+				log.Error().Err(err).Str("room_id", roomID).Msg("failed to reset broadcast state on room empty")
+			} else {
+				log.Info().Str("room_id", roomID).Msg("room empty, broadcast state reset")
+			}
+		}
+		// บันทึกเวลาไว้ให้ cleanup job ตรวจ (ไม่ลบทันที)
+		if err := h.store.SetRoomLastEmptied(ctx, roomID); err != nil {
 			log.Error().Err(err).Str("room_id", roomID).Msg("failed to set room last_emptied")
 		} else {
 			log.Info().Str("room_id", roomID).Msg("room empty, marked for deferred cleanup")
