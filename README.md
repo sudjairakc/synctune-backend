@@ -2,6 +2,8 @@
 
 Go backend สำหรับ SyncTune — Real-time Office Jukebox (Multi-Room)
 
+![Version](https://img.shields.io/badge/version-1.0.0-blue)
+
 **Stack:** Go · net/http · Melody (WebSocket) · Redis · zerolog
 
 ---
@@ -236,6 +238,23 @@ synctune-backend/
 ├── ticker/seekticker.go       ← seek_sync goroutine (per-room)
 └── youtube/metadata.go        ← oEmbed API + thumbnail fallback
 ```
+
+---
+
+## Changelog
+
+### v1.0.0 (2026-05-04)
+- Initial release
+- Multi-room WebSocket server ด้วย Melody
+- Redis state persistence per room
+- Queue, History, Chat แยกกันคนละห้อง
+- Autoplay / Shuffle / Random playback logic
+- seek_sync broadcast ทุก 5 วินาที
+- Rate limiting per client (add_song, report_error, send_message)
+- Daily cleanup 06:00 Asia/Bangkok
+- YouTube oEmbed metadata (title + thumbnail)
+- Admin panel + PromptPay QR integration
+- Docker + health/metrics endpoints
 
 ---
 

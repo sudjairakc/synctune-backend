@@ -1,5 +1,5 @@
 # CLAUDE.md — synctune-backend
-## Go Backend · net/http + Melody + Redis
+## Go Backend · net/http + Melody + Redis · v1.0.0
 
 อ่านไฟล์นี้ก่อนทำงานใดๆ ใน repo นี้เสมอ
 

@@ -117,11 +117,6 @@ func HandleAddSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		return
 	}
 
-	if findSongByVideoID(state.CurrentQueue, videoID) {
-		h.SendToSession(client.Conn, "error", model.WSError{Code: "DUPLICATE_SONG", Message: "เพลงนี้อยู่ในคิวแล้ว"})
-		return
-	}
-
 	if len(state.CurrentQueue) >= maxQueueSize(h) {
 		h.SendToSession(client.Conn, "error", model.WSError{Code: "QUEUE_FULL", Message: "คิวเต็มแล้ว"})
 		return
@@ -720,15 +715,6 @@ func findSongIndex(queue []model.Song, queueID string) int {
 		}
 	}
 	return -1
-}
-
-func findSongByVideoID(queue []model.Song, videoID string) bool {
-	for _, s := range queue {
-		if s.ID == videoID {
-			return true
-		}
-	}
-	return false
 }
 
 func maxQueueSize(_ *hub.Hub) int {
