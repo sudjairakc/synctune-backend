@@ -275,6 +275,36 @@ func (a *Handler) handleSkipBroadcast(w http.ResponseWriter, r *http.Request) {
 	jsonOK(w, map[string]string{"status": "skipped"})
 }
 
+// mergeTopSpenders รวมยอดของ spenders ที่ชื่อเดียวกัน (case-insensitive)
+func mergeTopSpenders(spenders []model.TopSpender) []model.TopSpender {
+	type entry struct {
+		id     string
+		name   string
+		amount int
+		date   string
+	}
+	order := []string{}
+	m := map[string]*entry{}
+	for _, sp := range spenders {
+		key := strings.ToLower(strings.TrimSpace(sp.Name))
+		if e, ok := m[key]; ok {
+			e.amount += sp.Amount
+			if sp.Date > e.date {
+				e.date = sp.Date
+			}
+		} else {
+			m[key] = &entry{id: sp.ID, name: sp.Name, amount: sp.Amount, date: sp.Date}
+			order = append(order, key)
+		}
+	}
+	result := make([]model.TopSpender, 0, len(order))
+	for _, key := range order {
+		e := m[key]
+		result = append(result, model.TopSpender{ID: e.id, Name: e.name, Amount: e.amount, Date: e.date})
+	}
+	return result
+}
+
 // GET /top-spenders — public endpoint (ไม่ต้อง auth)
 func (a *Handler) handlePublicTopSpenders(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -286,7 +316,18 @@ func (a *Handler) handlePublicTopSpenders(w http.ResponseWriter, r *http.Request
 		jsonError(w, "failed to load top spenders", http.StatusInternalServerError)
 		return
 	}
-	jsonOK(w, spenders)
+	jsonOK(w, mergeTopSpenders(spenders))
+}
+
+// broadcastTopSpenders broadcast top_spenders_updated ไปทุกห้อง
+func (a *Handler) broadcastTopSpenders(ctx context.Context) {
+	spenders, err := a.s.GetTopSpenders(ctx)
+	if err != nil {
+		return
+	}
+	a.h.BroadcastToAll("top_spenders_updated", map[string]interface{}{
+		"spenders": mergeTopSpenders(spenders),
+	})
 }
 
 // GET/POST/PUT/DELETE /admin/top-spenders — CRUD top spenders
@@ -318,6 +359,7 @@ func (a *Handler) handleTopSpenders(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "failed to save", http.StatusInternalServerError)
 			return
 		}
+		a.broadcastTopSpenders(ctx)
 		jsonOK(w, body)
 
 	case http.MethodPut:
@@ -343,6 +385,7 @@ func (a *Handler) handleTopSpenders(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "failed to save", http.StatusInternalServerError)
 			return
 		}
+		a.broadcastTopSpenders(ctx)
 		jsonOK(w, body)
 
 	case http.MethodDelete:
@@ -362,6 +405,7 @@ func (a *Handler) handleTopSpenders(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "failed to save", http.StatusInternalServerError)
 			return
 		}
+		a.broadcastTopSpenders(ctx)
 		jsonOK(w, map[string]string{"status": "deleted"})
 
 	default:

@@ -331,6 +331,19 @@ func (h *Hub) KickClient(clientID string) bool {
 	return true
 }
 
+// BroadcastToAll ส่ง Event ไปทุก Client ในทุกห้อง
+func (h *Hub) BroadcastToAll(event string, payload interface{}) {
+	h.mu.RLock()
+	roomIDs := make([]string, 0, len(h.rooms))
+	for roomID := range h.rooms {
+		roomIDs = append(roomIDs, roomID)
+	}
+	h.mu.RUnlock()
+	for _, roomID := range roomIDs {
+		h.BroadcastToRoom(roomID, event, payload)
+	}
+}
+
 // sessionClientID ดึง client_id จาก session (set ตอน Register)
 func (h *Hub) sessionClientID(session *melody.Session) string {
 	val, exists := session.Get("client_id")
