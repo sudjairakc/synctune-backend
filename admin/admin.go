@@ -42,6 +42,8 @@ func (a *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("/admin/schedules", a.auth(http.HandlerFunc(a.handleSchedules)))
 	mux.Handle("/admin/schedules/trigger", a.auth(http.HandlerFunc(a.handleTrigger)))
 	mux.Handle("/admin/broadcast/skip", a.auth(http.HandlerFunc(a.handleSkipBroadcast)))
+	mux.Handle("/admin/top-spenders", a.auth(http.HandlerFunc(a.handleTopSpenders)))
+	mux.HandleFunc("/top-spenders", a.handlePublicTopSpenders)
 }
 
 // auth middleware — ตรวจ Bearer token หรือ ?token= query param
@@ -271,6 +273,100 @@ func (a *Handler) handleSkipBroadcast(w http.ResponseWriter, r *http.Request) {
 	a.scheduler.SkipCurrentBroadcast()
 	log.Info().Msg("admin: skipped current broadcast")
 	jsonOK(w, map[string]string{"status": "skipped"})
+}
+
+// GET /top-spenders — public endpoint (ไม่ต้อง auth)
+func (a *Handler) handlePublicTopSpenders(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	spenders, err := a.s.GetTopSpenders(context.Background())
+	if err != nil {
+		jsonError(w, "failed to load top spenders", http.StatusInternalServerError)
+		return
+	}
+	jsonOK(w, spenders)
+}
+
+// GET/POST/PUT/DELETE /admin/top-spenders — CRUD top spenders
+func (a *Handler) handleTopSpenders(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+	switch r.Method {
+	case http.MethodGet:
+		spenders, err := a.s.GetTopSpenders(ctx)
+		if err != nil {
+			jsonError(w, "failed to load top spenders", http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, spenders)
+
+	case http.MethodPost:
+		var body model.TopSpender
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if body.Name == "" || body.Amount <= 0 || body.Date == "" {
+			jsonError(w, "name, amount and date required", http.StatusBadRequest)
+			return
+		}
+		body.ID = uuid.New().String()
+		spenders, _ := a.s.GetTopSpenders(ctx)
+		spenders = append(spenders, body)
+		if err := a.s.SetTopSpenders(ctx, spenders); err != nil {
+			jsonError(w, "failed to save", http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, body)
+
+	case http.MethodPut:
+		var body model.TopSpender
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.ID == "" {
+			jsonError(w, "invalid body or missing id", http.StatusBadRequest)
+			return
+		}
+		spenders, _ := a.s.GetTopSpenders(ctx)
+		found := false
+		for i, sp := range spenders {
+			if sp.ID == body.ID {
+				spenders[i] = body
+				found = true
+				break
+			}
+		}
+		if !found {
+			jsonError(w, "top spender not found", http.StatusNotFound)
+			return
+		}
+		if err := a.s.SetTopSpenders(ctx, spenders); err != nil {
+			jsonError(w, "failed to save", http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, body)
+
+	case http.MethodDelete:
+		id := r.URL.Query().Get("id")
+		if id == "" {
+			jsonError(w, "id required", http.StatusBadRequest)
+			return
+		}
+		spenders, _ := a.s.GetTopSpenders(ctx)
+		filtered := spenders[:0]
+		for _, sp := range spenders {
+			if sp.ID != id {
+				filtered = append(filtered, sp)
+			}
+		}
+		if err := a.s.SetTopSpenders(ctx, filtered); err != nil {
+			jsonError(w, "failed to save", http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, map[string]string{"status": "deleted"})
+
+	default:
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 func jsonOK(w http.ResponseWriter, v interface{}) {

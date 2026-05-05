@@ -69,6 +69,10 @@ type Store interface {
 	GetSchedules(ctx context.Context) ([]model.BroadcastSchedule, error)
 	// SetSchedules บันทึก broadcast schedules ลง Redis
 	SetSchedules(ctx context.Context, schedules []model.BroadcastSchedule) error
+	// GetTopSpenders คืน top spenders ทั้งหมด
+	GetTopSpenders(ctx context.Context) ([]model.TopSpender, error)
+	// SetTopSpenders บันทึก top spenders ลง Redis
+	SetTopSpenders(ctx context.Context, spenders []model.TopSpender) error
 	// IncrSeekTime เพิ่ม SeekTime แบบ atomic ด้วย Lua script
 	// คืน seek_time ใหม่, หรือ -1 ถ้าห้องไม่ได้เล่นหรือเป็น live stream
 	IncrSeekTime(ctx context.Context, roomID string, delta int) (int, error)
@@ -538,6 +542,36 @@ state.seek_time = seek
 redis.call('SET', KEYS[1], cjson.encode(state))
 return seek
 `)
+
+const topSpendersKey = "synctune:top_spenders"
+
+// GetTopSpenders คืน top spenders ทั้งหมดจาก Redis
+func (s *RedisStore) GetTopSpenders(ctx context.Context) ([]model.TopSpender, error) {
+	data, err := s.client.Get(ctx, topSpendersKey).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return []model.TopSpender{}, nil
+		}
+		return nil, fmt.Errorf("GetTopSpenders: redis GET: %w", err)
+	}
+	var spenders []model.TopSpender
+	if err := json.Unmarshal(data, &spenders); err != nil {
+		return nil, fmt.Errorf("GetTopSpenders: unmarshal: %w", err)
+	}
+	return spenders, nil
+}
+
+// SetTopSpenders บันทึก top spenders ลง Redis
+func (s *RedisStore) SetTopSpenders(ctx context.Context, spenders []model.TopSpender) error {
+	data, err := json.Marshal(spenders)
+	if err != nil {
+		return fmt.Errorf("SetTopSpenders: marshal: %w", err)
+	}
+	if err := s.client.Set(ctx, topSpendersKey, data, 0).Err(); err != nil {
+		return fmt.Errorf("SetTopSpenders: redis SET: %w", err)
+	}
+	return nil
+}
 
 // IncrSeekTime เพิ่ม seek_time แบบ atomic — คืน -1 ถ้าห้องไม่ได้เล่นหรือเป็น live stream
 func (s *RedisStore) IncrSeekTime(ctx context.Context, roomID string, delta int) (int, error) {

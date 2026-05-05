@@ -80,3 +80,11 @@ type BroadcastSchedule struct {
 	Label      string `json:"label"` // ชื่อแสดงผล (optional)
 	Enabled    bool   `json:"enabled"`
 }
+
+// TopSpender คือ 1 รายการ top spender ที่เก็บใน Redis
+type TopSpender struct {
+	ID     string `json:"id"`     // UUID
+	Name   string `json:"name"`   // ชื่อ
+	Amount int    `json:"amount"` // ยอดเงิน (บาท)
+	Date   string `json:"date"`   // วันที่ (YYYY-MM-DD)
+}
