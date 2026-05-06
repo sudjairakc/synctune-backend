@@ -216,6 +216,8 @@ func main() {
 	// Setup Melody (WebSocket)
 	m := melody.New()
 	m.Config.MaxMessageSize = 3 * 1024 * 1024 // 3MB for image support
+	m.Config.PingPeriod = 20 * time.Second
+	m.Config.PongWait = 30 * time.Second
 
 	m.HandleConnect(func(s *melody.Session) {
 		h.Register(s)

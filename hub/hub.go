@@ -87,11 +87,17 @@ func (h *Hub) Run() {
 		h.mu.RUnlock()
 
 		log.Debug().Str("event", msg.event).Str("room_id", msg.roomID).Int("clients", len(clients)).Msg("broadcasting to room")
+		var wg sync.WaitGroup
 		for _, c := range clients {
-			if err := c.Conn.Write(data); err != nil {
-				log.Warn().Str("client_id", c.ID).Err(err).Msg("failed to write to client")
-			}
+			wg.Add(1)
+			go func(cl *Client) {
+				defer wg.Done()
+				if err := cl.Conn.Write(data); err != nil {
+					log.Warn().Str("client_id", cl.ID).Err(err).Msg("failed to write to client")
+				}
+			}(c)
 		}
+		wg.Wait()
 	}
 }
 
@@ -266,7 +272,11 @@ func (h *Hub) BroadcastToRoom(roomID, event string, payload interface{}) {
 	n := len(h.rooms[roomID])
 	h.mu.RUnlock()
 	log.Debug().Str("event", event).Str("room_id", roomID).Int("clients", n).Msg("broadcast queued")
-	h.broadcastCh <- broadcastMsg{roomID: roomID, event: event, payload: payload}
+	select {
+	case h.broadcastCh <- broadcastMsg{roomID: roomID, event: event, payload: payload}:
+	default:
+		log.Warn().Str("event", event).Str("room_id", roomID).Msg("broadcast channel full, message dropped")
+	}
 }
 
 // SendToSession ส่ง Event ไปยัง Client คนเดียว
