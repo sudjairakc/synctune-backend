@@ -60,7 +60,8 @@ func HandleSoundPadSet(h *hub.Hub, client *hub.Client, rawPayload json.RawMessag
 		log.Error().Err(err).Msg("HandleSoundPadSet: failed to save pad")
 		return
 	}
-	log.Info().Str("room_id", client.RoomID).Int("slot", payload.Slot).Str("video_id", payload.VideoID).Msg("soundpad slot set")
+	log.Info().Str("room_id", client.RoomID).Int("slot", payload.Slot).Str("video_id", payload.VideoID).Str("by_username", client.User.Username).Msg("soundpad slot set")
+	broadcaster.BroadcastRoomAction(h, client.RoomID, "soundpad_set", client.User.Username, payload.Title)
 	broadcaster.BroadcastSoundPadUpdated(h, client.RoomID, pad)
 }
 
@@ -84,12 +85,17 @@ func HandleSoundPadClear(h *hub.Hub, client *hub.Client, rawPayload json.RawMess
 		log.Error().Err(err).Msg("HandleSoundPadClear: failed to get pad")
 		return
 	}
+	oldTitle := ""
+	if pad[payload.Slot] != nil {
+		oldTitle = pad[payload.Slot].Title
+	}
 	pad[payload.Slot] = nil
 	if err := h.Store().SetSoundPad(ctx, client.RoomID, pad); err != nil {
 		log.Error().Err(err).Msg("HandleSoundPadClear: failed to save pad")
 		return
 	}
-	log.Info().Str("room_id", client.RoomID).Int("slot", payload.Slot).Msg("soundpad slot cleared")
+	log.Info().Str("room_id", client.RoomID).Int("slot", payload.Slot).Str("by_username", client.User.Username).Msg("soundpad slot cleared")
+	broadcaster.BroadcastRoomAction(h, client.RoomID, "soundpad_clear", client.User.Username, oldTitle)
 	broadcaster.BroadcastSoundPadUpdated(h, client.RoomID, pad)
 }
 

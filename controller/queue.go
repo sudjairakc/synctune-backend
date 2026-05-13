@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
@@ -476,6 +477,7 @@ func executeSkipSong(h *hub.Hub, client *hub.Client, songQueueID string) {
 	}
 
 	log.Info().Str("event", "skip_song").Str("room_id", roomID).Str("song_id", currentSong.ID).Str("by_username", client.User.Username).Msg("song skipped by vote")
+	broadcaster.BroadcastRoomAction(h, roomID, "skip_song", client.User.Username, currentSong.Title)
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 }
 
@@ -672,7 +674,8 @@ func HandleSetPlaybackSpeed(h *hub.Hub, client *hub.Client, rawPayload json.RawM
 		log.Error().Err(err).Msg("HandleSetPlaybackSpeed: failed to save state")
 		return
 	}
-	log.Info().Str("room_id", client.RoomID).Float64("speed", payload.Speed).Msg("playback speed changed")
+	log.Info().Str("room_id", client.RoomID).Float64("speed", payload.Speed).Str("by_user_id", client.User.ID).Str("by_username", client.User.Username).Msg("playback speed changed")
+	broadcaster.BroadcastRoomAction(h, client.RoomID, "set_playback_speed", client.User.Username, fmt.Sprintf("%.2gx", payload.Speed))
 	h.BroadcastToRoom(client.RoomID, "playback_speed_updated", map[string]float64{"speed": payload.Speed})
 }
 
