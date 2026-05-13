@@ -40,6 +40,9 @@ func roomSoundPadHistoryKey(roomID string) string {
 // roomLastEmptiedKey คืน Redis key ที่เก็บ Unix timestamp ตอนห้องว่างล่าสุด
 func roomLastEmptiedKey(roomID string) string { return "synctune:room:" + roomID + ":last_emptied" }
 
+// roomVoteKey คืน Redis key สำหรับ active vote ของห้องนั้น
+func roomVoteKey(roomID string) string { return "synctune:room:" + roomID + ":vote" }
+
 // Store กำหนด Interface สำหรับการเข้าถึง Storage
 type Store interface {
 	GetState(ctx context.Context, roomID string) (*model.PlaylistState, error)
@@ -76,6 +79,12 @@ type Store interface {
 	// IncrSeekTime เพิ่ม SeekTime แบบ atomic ด้วย Lua script
 	// คืน seek_time ใหม่, หรือ -1 ถ้าห้องไม่ได้เล่นหรือเป็น live stream
 	IncrSeekTime(ctx context.Context, roomID string, delta int) (int, error)
+	// GetVote โหลด Vote ที่ active อยู่ในห้อง คืน nil ถ้าไม่มีหรือหมดอายุ
+	GetVote(ctx context.Context, roomID string) (*model.Vote, error)
+	// SetVote บันทึก Vote ลง Redis พร้อม TTL
+	SetVote(ctx context.Context, roomID string, vote *model.Vote, ttl time.Duration) error
+	// DeleteVote ลบ Vote ออกจากห้อง
+	DeleteVote(ctx context.Context, roomID string) error
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -608,6 +617,42 @@ func (s *RedisStore) SetSchedules(ctx context.Context, schedules []model.Broadca
 	}
 	if err := s.client.Set(ctx, broadcastSchedulesKey, data, 0).Err(); err != nil {
 		return fmt.Errorf("SetSchedules: redis SET: %w", err)
+	}
+	return nil
+}
+
+// GetVote โหลด Vote ที่ active อยู่ในห้อง คืน nil, nil ถ้าไม่มีหรือหมดอายุ
+func (s *RedisStore) GetVote(ctx context.Context, roomID string) (*model.Vote, error) {
+	data, err := s.client.Get(ctx, roomVoteKey(roomID)).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("GetVote: redis GET: %w", err)
+	}
+	var vote model.Vote
+	if err := json.Unmarshal(data, &vote); err != nil {
+		return nil, fmt.Errorf("GetVote: unmarshal: %w", err)
+	}
+	return &vote, nil
+}
+
+// SetVote บันทึก Vote ลง Redis พร้อม TTL
+func (s *RedisStore) SetVote(ctx context.Context, roomID string, vote *model.Vote, ttl time.Duration) error {
+	data, err := json.Marshal(vote)
+	if err != nil {
+		return fmt.Errorf("SetVote: marshal: %w", err)
+	}
+	if err := s.client.Set(ctx, roomVoteKey(roomID), data, ttl).Err(); err != nil {
+		return fmt.Errorf("SetVote: redis SET: %w", err)
+	}
+	return nil
+}
+
+// DeleteVote ลบ Vote ออกจากห้อง
+func (s *RedisStore) DeleteVote(ctx context.Context, roomID string) error {
+	if err := s.client.Del(ctx, roomVoteKey(roomID)).Err(); err != nil {
+		return fmt.Errorf("DeleteVote: redis DEL: %w", err)
 	}
 	return nil
 }

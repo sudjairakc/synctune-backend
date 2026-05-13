@@ -173,6 +173,69 @@ func BroadcastSoundPadPlay(h hubInterface, roomID string, slot int, videoID, use
 	h.BroadcastToRoom(roomID, "soundpad_play", soundPadPlayPayload{Slot: slot, VideoID: videoID, UserID: userID})
 }
 
+// BroadcastSoundPadStop broadcast stop ไปทั้งห้อง
+func BroadcastSoundPadStop(h hubInterface, roomID string) {
+	h.BroadcastToRoom(roomID, "soundpad_stop", struct{}{})
+}
+
+// roomActionPayload คือ payload ของ event room_action
+type roomActionPayload struct {
+	Action     string `json:"action"`
+	ByUsername string `json:"by_username"`
+	Detail     string `json:"detail,omitempty"`
+}
+
+// BroadcastRoomAction broadcast action log ไปทั้งห้อง
+func BroadcastRoomAction(h hubInterface, roomID, action, byUsername, detail string) {
+	h.BroadcastToRoom(roomID, "room_action", roomActionPayload{Action: action, ByUsername: byUsername, Detail: detail})
+}
+
+// voteEventPayload คือ payload สำหรับ vote events ทุกประเภท
+type voteEventPayload struct {
+	VoteID      string `json:"vote_id"`
+	Action      string `json:"action,omitempty"`
+	SongQueueID string `json:"song_queue_id,omitempty"`
+	SongTitle   string `json:"song_title,omitempty"`
+	InitiatedBy string `json:"initiated_by,omitempty"`
+	YesVotes    int    `json:"yes_votes"`
+	Required    int    `json:"required"`
+	Total       int    `json:"total,omitempty"`
+	ExpiresAt   int64  `json:"expires_at,omitempty"`
+	Result      string `json:"result,omitempty"` // "passed" | "expired"
+}
+
+// BroadcastVoteStarted broadcast vote เริ่มใหม่ไปทั้งห้อง
+func BroadcastVoteStarted(h hubInterface, roomID string, v *model.Vote) {
+	h.BroadcastToRoom(roomID, "vote_started", voteEventPayload{
+		VoteID:      v.ID,
+		Action:      string(v.Action),
+		SongQueueID: v.SongQueueID,
+		SongTitle:   v.SongTitle,
+		InitiatedBy: v.InitiatedBy,
+		YesVotes:    len(v.YesVoterIDs),
+		Required:    v.Required(),
+		Total:       v.TotalAtStart,
+		ExpiresAt:   v.ExpiresAt,
+	})
+}
+
+// BroadcastVoteUpdated broadcast สถานะ vote หลังมีคนโหวต
+func BroadcastVoteUpdated(h hubInterface, roomID string, v *model.Vote) {
+	h.BroadcastToRoom(roomID, "vote_updated", voteEventPayload{
+		VoteID:   v.ID,
+		YesVotes: len(v.YesVoterIDs),
+		Required: v.Required(),
+	})
+}
+
+// BroadcastVoteResolved broadcast ผลโหวตสุดท้าย (passed / expired)
+func BroadcastVoteResolved(h hubInterface, roomID string, v *model.Vote, result string) {
+	h.BroadcastToRoom(roomID, "vote_resolved", voteEventPayload{
+		VoteID: v.ID,
+		Result: result,
+	})
+}
+
 // messageDeletedPayload คือ payload ของ event message_deleted
 type messageDeletedPayload struct {
 	MessageID string `json:"message_id"`

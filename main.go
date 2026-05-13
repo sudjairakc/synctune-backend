@@ -190,6 +190,10 @@ func main() {
 			controller.HandleSoundPadClear(h, client, msg.Payload)
 		case "soundpad_play":
 			controller.HandleSoundPadPlay(h, client, msg.Payload)
+		case "soundpad_stop":
+			controller.HandleSoundPadStop(h, client, msg.Payload)
+		case "vote_cast":
+			controller.HandleVoteCast(h, client, msg.Payload)
 		default:
 			log.Warn().Str("event", msg.Event).Msg("unknown event received")
 		}

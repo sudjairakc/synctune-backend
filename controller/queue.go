@@ -157,7 +157,7 @@ func HandleAddSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 }
 
-// HandleRemoveSong จัดการ Event remove_song
+// HandleRemoveSong จัดการ Event remove_song — เริ่ม vote ก่อนลบ
 func HandleRemoveSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	if !requireJoined(h, client) {
 		return
@@ -183,24 +183,51 @@ func HandleRemoveSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage
 		h.SendToSession(client.Conn, "error", model.WSError{Code: "SONG_NOT_FOUND", Message: "ไม่พบเพลงในคิว"})
 		return
 	}
-
 	if removeIdx == state.CurrentIndex {
 		h.SendToSession(client.Conn, "error", model.WSError{Code: "CANNOT_REMOVE_CURRENT", Message: "ไม่สามารถลบเพลงที่กำลังเล่นอยู่ได้"})
 		return
 	}
 
+	song := state.CurrentQueue[removeIdx]
+	executed, err := startVote(h, client, model.VoteActionRemoveSong, song.QueueID, song.Title)
+	if err != nil {
+		log.Error().Err(err).Msg("HandleRemoveSong: failed to start vote")
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "SERVER_ERROR", Message: "เกิดข้อผิดพลาดภายใน"})
+		return
+	}
+	if executed {
+		executeRemoveSong(h, client, payload.SongID)
+	}
+}
+
+// executeRemoveSong ลบเพลงจริงหลัง vote ผ่าน
+func executeRemoveSong(h *hub.Hub, client *hub.Client, songQueueID string) {
+	ctx := context.Background()
+	roomID := client.RoomID
+	state, err := h.Store().GetState(ctx, roomID)
+	if err != nil {
+		log.Error().Err(err).Msg("executeRemoveSong: failed to get state")
+		return
+	}
+
+	removeIdx := findSongIndex(state.CurrentQueue, songQueueID)
+	if removeIdx == -1 || removeIdx == state.CurrentIndex {
+		return
+	}
+
+	removedSong := state.CurrentQueue[removeIdx]
 	state.CurrentQueue = append(state.CurrentQueue[:removeIdx], state.CurrentQueue[removeIdx+1:]...)
 	if removeIdx < state.CurrentIndex {
 		state.CurrentIndex--
 	}
 
 	if err := h.Store().SetState(ctx, roomID, state); err != nil {
-		log.Error().Err(err).Msg("HandleRemoveSong: failed to set state")
-		h.SendToSession(client.Conn, "error", model.WSError{Code: "SERVER_ERROR", Message: "เกิดข้อผิดพลาดภายใน"})
+		log.Error().Err(err).Msg("executeRemoveSong: failed to set state")
 		return
 	}
 
-	log.Info().Str("event", "remove_song").Str("room_id", roomID).Str("song_id", payload.SongID).Msg("song removed from queue")
+	log.Info().Str("event", "remove_song").Str("room_id", roomID).Str("song_id", songQueueID).Str("by_user_id", client.User.ID).Str("by_username", client.User.Username).Msg("song removed from queue")
+	broadcaster.BroadcastRoomAction(h, roomID, "remove_song", client.User.Username, removedSong.Title)
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 }
 
@@ -262,7 +289,8 @@ func HandleReorderQueue(h *hub.Hub, client *hub.Client, rawPayload json.RawMessa
 		return
 	}
 
-	log.Info().Str("event", "reorder_queue").Str("room_id", roomID).Str("song_id", payload.SongID).Int("new_index", toIdx).Msg("queue reordered")
+	log.Info().Str("event", "reorder_queue").Str("room_id", roomID).Str("song_id", payload.SongID).Int("from_index", fromIdx).Int("new_index", toIdx).Str("by_user_id", client.User.ID).Str("by_username", client.User.Username).Msg("queue reordered")
+	broadcaster.BroadcastRoomAction(h, roomID, "reorder_queue", client.User.Username, song.Title)
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 }
 
@@ -365,7 +393,7 @@ type skipSongPayload struct {
 	SongID string `json:"song_id"`
 }
 
-// HandleSkipSong จัดการ Event skip_song (user กด ⏭)
+// HandleSkipSong จัดการ Event skip_song — เริ่ม vote ก่อนข้าม
 func HandleSkipSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	if !requireJoined(h, client) {
 		return
@@ -388,14 +416,41 @@ func HandleSkipSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 	if len(state.CurrentQueue) == 0 {
 		return
 	}
-
 	currentSong := state.CurrentQueue[state.CurrentIndex]
 	if payload.SongID != currentSong.QueueID {
 		return
 	}
 
+	executed, err := startVote(h, client, model.VoteActionSkipSong, currentSong.QueueID, currentSong.Title)
+	if err != nil {
+		log.Error().Err(err).Msg("HandleSkipSong: failed to start vote")
+		return
+	}
+	if executed {
+		executeSkipSong(h, client, payload.SongID)
+	}
+}
+
+// executeSkipSong ข้ามเพลงจริงหลัง vote ผ่าน
+func executeSkipSong(h *hub.Hub, client *hub.Client, songQueueID string) {
+	ctx := context.Background()
+	roomID := client.RoomID
+	state, err := h.Store().GetState(ctx, roomID)
+	if err != nil {
+		log.Error().Err(err).Msg("executeSkipSong: failed to get state")
+		return
+	}
+
+	if len(state.CurrentQueue) == 0 {
+		return
+	}
+	currentSong := state.CurrentQueue[state.CurrentIndex]
+	if songQueueID != currentSong.QueueID {
+		return
+	}
+
 	if err := h.Store().PushHistory(ctx, roomID, model.HistorySong{Song: currentSong, Status: "skipped", SkippedBy: client.User.Username}); err != nil {
-		log.Error().Err(err).Msg("HandleSkipSong: failed to push history")
+		log.Error().Err(err).Msg("executeSkipSong: failed to push history")
 	}
 
 	broadcaster.BroadcastSongSkipped(h, roomID, currentSong, 0)
@@ -416,11 +471,11 @@ func HandleSkipSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 	}
 
 	if err := h.Store().SetState(ctx, roomID, state); err != nil {
-		log.Error().Err(err).Msg("HandleSkipSong: failed to set state")
+		log.Error().Err(err).Msg("executeSkipSong: failed to set state")
 		return
 	}
 
-	log.Info().Str("event", "skip_song").Str("room_id", roomID).Str("song_id", currentSong.ID).Msg("song skipped by user")
+	log.Info().Str("event", "skip_song").Str("room_id", roomID).Str("song_id", currentSong.ID).Str("by_username", client.User.Username).Msg("song skipped by vote")
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 }
 
@@ -581,7 +636,10 @@ func HandleSetPlaybackMode(h *hub.Hub, client *hub.Client, rawPayload json.RawMe
 		return
 	}
 
-	log.Info().Str("event", "set_playback_mode").Str("room_id", roomID).Bool("autoplay", state.Autoplay).Bool("shuffle", state.Shuffle).Bool("random_play", state.RandomPlay).Msg("playback mode updated")
+	log.Info().Str("event", "set_playback_mode").Str("room_id", roomID).Bool("autoplay", state.Autoplay).Bool("shuffle", state.Shuffle).Bool("random_play", state.RandomPlay).Str("by_user_id", client.User.ID).Str("by_username", client.User.Username).Msg("playback mode updated")
+	if modeDetail := buildModeDetail(payload); modeDetail != "" {
+		broadcaster.BroadcastRoomAction(h, roomID, "set_playback_mode", client.User.Username, modeDetail)
+	}
 	broadcaster.BroadcastPlaybackModeUpdated(h, roomID, state)
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 }
@@ -616,6 +674,26 @@ func HandleSetPlaybackSpeed(h *hub.Hub, client *hub.Client, rawPayload json.RawM
 	}
 	log.Info().Str("room_id", client.RoomID).Float64("speed", payload.Speed).Msg("playback speed changed")
 	h.BroadcastToRoom(client.RoomID, "playback_speed_updated", map[string]float64{"speed": payload.Speed})
+}
+
+func buildModeDetail(p setPlaybackModePayload) string {
+	onOff := func(v bool) string {
+		if v {
+			return "on"
+		}
+		return "off"
+	}
+	var parts []string
+	if p.Autoplay != nil {
+		parts = append(parts, "autoplay "+onOff(*p.Autoplay))
+	}
+	if p.Shuffle != nil {
+		parts = append(parts, "shuffle "+onOff(*p.Shuffle))
+	}
+	if p.RandomPlay != nil {
+		parts = append(parts, "random "+onOff(*p.RandomPlay))
+	}
+	return strings.Join(parts, ", ")
 }
 
 // fetchHistoryOrEmpty ดึง History จาก Store คืน slice ว่างถ้า error

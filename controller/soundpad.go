@@ -93,6 +93,17 @@ func HandleSoundPadClear(h *hub.Hub, client *hub.Client, rawPayload json.RawMess
 	broadcaster.BroadcastSoundPadUpdated(h, client.RoomID, pad)
 }
 
+// HandleSoundPadStop broadcast stop ไปทั้งห้อง — ไม่แตะ Redis
+func HandleSoundPadStop(h *hub.Hub, client *hub.Client, _ json.RawMessage) {
+	if client.User.ID == "" {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "NOT_JOINED", Message: "ต้องส่ง join ก่อน"})
+		return
+	}
+	log.Info().Str("room_id", client.RoomID).Str("username", client.User.Username).Msg("soundpad stop triggered")
+	broadcaster.BroadcastRoomAction(h, client.RoomID, "soundpad_stop", client.User.Username, "")
+	broadcaster.BroadcastSoundPadStop(h, client.RoomID)
+}
+
 // HandleSoundPadPlay broadcast trigger เล่นเสียง — ไม่แตะ Redis
 func HandleSoundPadPlay(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	if client.User.ID == "" {
