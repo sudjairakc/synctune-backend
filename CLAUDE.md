@@ -1,5 +1,5 @@
 # CLAUDE.md — synctune-backend
-## Go Backend · net/http + Melody + Redis · v1.0.0
+## Go Backend · net/http + Melody + Redis · v1.0.1
 
 อ่านไฟล์นี้ก่อนทำงานใดๆ ใน repo นี้เสมอ
 
@@ -71,24 +71,33 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 ```
 synctune-backend/
 ├── CLAUDE.md
-├── docs/                  ← Git Submodule (synctune-docs)
-├── main.go                ← Entry point + daily cleanup goroutine
+├── SKILL.md                   ← คู่มือ Claude Code Skills สำหรับ repo นี้
+├── DESIGN.md                  ← Architecture decisions และ design notes
+├── docs/                      ← Git Submodule (synctune-docs)
+├── main.go                    ← Entry point + daily cleanup goroutine
 ├── go.mod
 ├── .env.example
 ├── Dockerfile
-├── config/config.go       ← โหลด ENV Variables
+├── config/config.go           ← โหลด ENV Variables
 ├── model/
-│   ├── playlist.go        ← Song, PlaylistState, WSMessage structs
-│   ├── user.go            ← User, ChatMessage structs
-│   └── errors.go          ← Sentinel Errors ทั้งหมด
-├── store/redis.go         ← Redis operations per-room + FlushAll
-├── hub/hub.go             ← WebSocket connection pool + multi-room routing
+│   ├── playlist.go            ← Song, PlaylistState, SoundPad, BroadcastSchedule, TopSpender structs
+│   ├── user.go                ← User, ChatMessage structs
+│   ├── vote.go                ← Vote, VoteAction structs
+│   └── errors.go              ← Sentinel Errors ทั้งหมด
+├── store/redis.go             ← Redis operations per-room (state/history/chat/soundpad/vote)
+├── hub/hub.go                 ← WebSocket connection pool + multi-room routing
 ├── controller/
-│   ├── queue.go           ← Business logic: add/remove/reorder/skip/song_ended/playback_mode
-│   └── chat.go            ← Business logic: join (room) / send_message
-├── broadcaster/           ← Broadcast helpers (ทุกฟังก์ชันรับ roomID)
-├── ticker/seekticker.go   ← seek_sync Goroutine ทุก 5 วิ (per-room)
-└── youtube/metadata.go    ← ดึง Title + Thumbnail ผ่าน oEmbed API
+│   ├── queue.go               ← Business logic: add/remove/reorder/skip/song_ended/playback_mode
+│   ├── chat.go                ← Business logic: join (room) / send_message
+│   ├── soundpad.go            ← SoundPad: set/clear/play/stop handlers
+│   ├── voice.go               ← Voice PTT: WebRTC signaling relay handlers
+│   └── vote.go                ← Voting: startVote / HandleVoteCast / resolveVote
+├── broadcaster/               ← Broadcast helpers (ทุกฟังก์ชันรับ roomID)
+├── broadcast/scheduler.go     ← Scheduled broadcast per room (cron-based)
+├── ticker/seekticker.go       ← seek_sync Goroutine ทุก 5 วิ (per-room)
+├── admin/admin.go             ← Admin panel + PromptPay QR + TopSpenders API
+├── promptpay/promptpay.go     ← PromptPay QR generation
+└── youtube/metadata.go        ← ดึง Title + Thumbnail ผ่าน oEmbed API
 ```
 
 **หมายเหตุ:** ใช้ `net/http` standard library (ไม่ใช่ Fiber) เพราะ Fiber/fasthttp ไม่รองรับ WebSocket hijacking ที่ melody ต้องการ
@@ -143,6 +152,11 @@ ALLOWED_ORIGINS=*
 | `synctune:room:{roomID}:state` | String (JSON) | PlaylistState ของห้องนั้น |
 | `synctune:room:{roomID}:history` | List | HistorySong[] newest first, max 50 |
 | `synctune:room:{roomID}:chat` | List | ChatMessage[] newest first, max 100 |
+| `synctune:room:{roomID}:soundpad` | String (JSON) | `[SoundPadSlot\|null, ...]` 50 slots |
+| `synctune:room:{roomID}:soundpad_history` | List | SoundPadPlayEvent[] newest first |
+| `synctune:room:{roomID}:vote` | String (JSON) | Vote ที่ active อยู่ (TTL 30 วิ) |
+| `synctune:schedules` | String (JSON) | BroadcastSchedule[] ทั้งหมด |
+| `synctune:top_spenders` | String (JSON) | TopSpender[] |
 
 - ห้องถูกสร้างอัตโนมัติเมื่อมี Client join
 - ห้องถูกลบทันทีเมื่อ Client คนสุดท้ายในห้อง disconnect (`hub.Unregister` → `store.DeleteRoom`)
@@ -153,30 +167,50 @@ ALLOWED_ORIGINS=*
 ## 5. WebSocket Events ที่ Backend รับผิดชอบ
 
 ### รับจาก Client
-| Event | Handler | Payload | หมายเหตุ |
-|---|---|---|---|
-| `join` | `controller.HandleJoin` | `{ username, profile_img?, room_id? }` | ต้องส่งก่อน event อื่นทุกตัว — ถ้าไม่ส่ง room_id จะสร้างห้องใหม่ให้ |
-| `add_song` | `controller.HandleAddSong` | `{ youtube_url, added_by }` | ต้อง join ก่อน |
-| `remove_song` | `controller.HandleRemoveSong` | `{ song_id }` (queue_id) | ต้อง join ก่อน |
-| `reorder_queue` | `controller.HandleReorderQueue` | `{ song_id, new_index }` (queue_id) | ต้อง join ก่อน |
-| `report_error` | `controller.HandleReportError` | `{ song_id, error_code }` (101/150) | ต้อง join ก่อน |
-| `song_ended` | `controller.HandleSongEnded` | `{ song_id }` (queue_id) | ดู autoplay/shuffle/random_play |
-| `skip_song` | `controller.HandleSkipSong` | `{ song_id }` (queue_id) | เล่นต่อเสมอถ้าคิวไม่ว่าง |
-| `set_playback_mode` | `controller.HandleSetPlaybackMode` | `{ autoplay?, shuffle?, random_play? }` | merge ไม่ replace |
-| `send_message` | `controller.HandleSendMessage` | `{ text }` | ต้อง join ก่อน, max 500 ตัวอักษร |
+| Event | Handler | Payload |
+|---|---|---|
+| `join` | `controller.HandleJoin` | `{ username, profile_img?, room_id? }` |
+| `add_song` | `controller.HandleAddSong` | `{ youtube_url, added_by }` |
+| `remove_song` | `controller.HandleRemoveSong` | `{ song_id }` (queue_id) |
+| `reorder_queue` | `controller.HandleReorderQueue` | `{ song_id, new_index }` |
+| `report_error` | `controller.HandleReportError` | `{ song_id, error_code }` (101/150) |
+| `song_ended` | `controller.HandleSongEnded` | `{ song_id }` |
+| `skip_song` | `controller.HandleSkipSong` | `{ song_id }` |
+| `set_playback_mode` | `controller.HandleSetPlaybackMode` | `{ autoplay?, shuffle?, random_play?, playback_speed? }` |
+| `send_message` | `controller.HandleSendMessage` | `{ text }` |
+| `soundpad_set` | `controller.HandleSoundPadSet` | `{ slot, video_id, title }` |
+| `soundpad_clear` | `controller.HandleSoundPadClear` | `{ slot }` |
+| `soundpad_play` | `controller.HandleSoundPadPlay` | `{ slot }` |
+| `soundpad_stop` | `controller.HandleSoundPadStop` | — |
+| `vote_cast` | `controller.HandleVoteCast` | `{ vote_id }` |
+| `voice_start` | `controller.HandleVoiceStart` | — |
+| `voice_stop` | `controller.HandleVoiceStop` | — |
+| `voice_join` | `controller.HandleVoiceJoin` | `{ to: client_id }` |
+| `voice_offer` | `controller.HandleVoiceOffer` | `{ to, sdp }` |
+| `voice_answer` | `controller.HandleVoiceAnswer` | `{ to, sdp }` |
+| `voice_ice` | `controller.HandleVoiceICE` | `{ to, candidate }` |
 
 ### ส่งไปยัง Client
-| Event | เมื่อไหร่ | หมายเหตุ |
-|---|---|---|
-| `room_joined` | หลัง join สำเร็จ (เฉพาะ Client นั้น ไม่ broadcast) | รวม room_id, queue, history, chat_history, online_users |
-| `queue_updated` | คิวเปลี่ยนแปลง (broadcast ในห้อง) | รวม history ด้วยเสมอ |
-| `seek_sync` | ทุก 5 วิ ขณะ is_playing=true | per-room |
-| `song_skipped` | ข้ามเพลง (broadcast ในห้อง) | reason: user_skipped / embed_not_allowed / embed_not_allowed_by_request |
-| `playback_mode_updated` | หลัง set_playback_mode สำเร็จ (broadcast ในห้อง) | |
-| `user_joined` | หลัง join สำเร็จ (broadcast ในห้อง) | รวม online_users ล่าสุด |
-| `user_left` | client disconnect หลัง join แล้ว (broadcast ในห้อง) | รวม online_users ล่าสุด |
-| `message_received` | หลัง send_message สำเร็จ (broadcast ในห้อง) | |
-| `error` | ส่งกลับ Client ที่ทำ action ผิด (ไม่ broadcast) | |
+| Event | เมื่อไหร่ |
+|---|---|
+| `room_joined` | หลัง join สำเร็จ (เฉพาะ Client นั้น) |
+| `queue_updated` | คิวเปลี่ยนแปลง (broadcast ในห้อง) |
+| `seek_sync` | ทุก 5 วิ ขณะ is_playing=true |
+| `song_skipped` | ข้ามเพลง (broadcast ในห้อง) |
+| `playback_mode_updated` | หลัง set_playback_mode (broadcast) |
+| `user_joined` | หลัง join (broadcast) |
+| `user_left` | client disconnect (broadcast) |
+| `message_received` | หลัง send_message (broadcast) |
+| `soundpad_updated` | หลัง soundpad_set/clear (broadcast) |
+| `soundpad_play` | หลัง soundpad_play (broadcast) |
+| `soundpad_stop` | หลัง soundpad_stop (broadcast) |
+| `vote_started` | เปิด vote ใหม่ (broadcast) |
+| `vote_updated` | มี yes vote เพิ่ม (broadcast) |
+| `vote_resolved` | vote สรุปผล (broadcast) |
+| `voice_start` | มีคนเริ่ม PTT (broadcast) |
+| `voice_stop` | PTT หยุด (broadcast) |
+| `voice_join/offer/answer/ice` | Relay ระหว่าง clients (point-to-point) |
+| `error` | ส่งกลับ Client ที่ทำ action ผิด |
 
 ---
 
@@ -184,49 +218,54 @@ ALLOWED_ORIGINS=*
 
 ```go
 type Song struct {
-    QueueID   string `json:"queue_id"`  // UUID ต่อ queue slot — ใช้ใน event ทุกตัว
-    ID        string `json:"id"`        // YouTube Video ID (11 chars)
-    Title     string `json:"title"`     // ได้จาก oEmbed API
-    Thumbnail string `json:"thumbnail"` // maxresdefault.jpg หรือ hqdefault.jpg
-    AddedBy   string `json:"added_by"`
-    Duration  int    `json:"duration"`
+    QueueID     string `json:"queue_id"`
+    ID          string `json:"id"`
+    Title       string `json:"title"`
+    Thumbnail   string `json:"thumbnail"`
+    AddedBy     string `json:"added_by"`
+    Duration    int    `json:"duration"`
+    IsBroadcast bool   `json:"is_broadcast,omitempty"`
+    IsLive      bool   `json:"is_live,omitempty"`
 }
 
-type User struct {
-    ID         string `json:"id"`          // UUID ต่อ session (= Client.ID)
-    Username   string `json:"username"`
-    ProfileImg string `json:"profile_img"`
+type SoundPadSlot struct {
+    VideoID string `json:"video_id"`
+    Title   string `json:"title"`
 }
+const SoundPadSize = 50  // index 0–49
 
-type ChatMessage struct {
-    ID        string `json:"id"`        // UUID ต่อข้อความ
-    User      User   `json:"user"`
-    Text      string `json:"text"`
-    Timestamp int64  `json:"timestamp"` // Unix milliseconds
+type Vote struct {
+    ID            string     `json:"id"`
+    Action        VoteAction `json:"action"` // "remove_song" | "skip_song"
+    SongQueueID   string     `json:"song_queue_id"`
+    InitiatedBy   string     `json:"initiated_by"`
+    YesVoterIDs   []string   `json:"yes_voter_ids"`
+    TotalAtStart  int        `json:"total_at_start"`
+    ExpiresAt     int64      `json:"expires_at"` // Unix ms
 }
+// Required() = ceil(TotalAtStart / 2)
 ```
 
 **สำคัญ:** `song_id` ในทุก event = `queue_id` ไม่ใช่ YouTube Video ID
 
 ---
 
-## 7. Business Logic — Critical (อย่าเปลี่ยนโดยไม่อ่าน Spec)
+## 7. Business Logic — Critical
 
 ### Multi-Room
-- `Client.RoomID` ว่างเปล่าจนกว่าจะ `join` — ทุก handler ตรวจ `requireJoined` ก่อนเสมอ
-- `hub.rooms` เป็น `map[roomID]map[clientID]*Client` — Broadcast ส่งเฉพาะ Client ในห้องเดียวกัน
-- ห้องถูกลบจาก `hub.rooms` และ Redis ทันทีเมื่อ Client คนสุดท้ายออก
+- `Client.RoomID` ว่างเปล่าจนกว่าจะ `join`
+- `hub.rooms` เป็น `map[roomID]map[clientID]*Client`
 - Room ID: ตัวเลข 6 หลัก (100000–999999) สุ่มด้วย `crypto/rand`
 
 ### Deduplication (report_error / skip_song / song_ended)
 ต้อง reload State จาก Redis ก่อนตรวจ `queue_id` เสมอ — ห้ามใช้ in-memory
 
-### song_ended — Autoplay / Shuffle / Random
+### song_ended — Autoplay Logic
 ```
 autoplay=false → หยุด
 autoplay=true + queue ว่าง → หยุด
 autoplay=true + random_play=true → สุ่ม index ใหม่
-autoplay=true + shuffle=true → เล่นตาม queue ที่ shuffle ไว้แล้ว
+autoplay=true + shuffle=true → เล่นตาม queue ที่ shuffle ไว้
 autoplay=true (ปกติ) → เล่น index ถัดไป
 ```
 
@@ -236,7 +275,19 @@ queue ว่าง → หยุด
 queue มีเพลง + random_play=true → สุ่ม index ใหม่
 queue มีเพลง → เล่น index ถัดไป
 ```
-(ไม่ดู autoplay เพราะ skip = user ตั้งใจเปลี่ยน)
+ไม่ดู autoplay เพราะ skip = user ตั้งใจเปลี่ยน
+
+### Voting — remove_song / skip_song
+- ถ้า adder == initiator → execute ทันที ไม่เปิด vote
+- ถ้า total_users == 1 → execute ทันที
+- ถ้ามี vote active อยู่แล้ว → return `VOTE_IN_PROGRESS` error
+- Vote TTL = 30 วินาที (เก็บใน Redis พร้อม TTL)
+- `Required()` = `ceil(TotalAtStart / 2)` — majority vote
+
+### SoundPad — Independent Playback
+- `soundpad_play` ไม่กระทบ queue/playlist
+- แต่ละ client จัดการ audio ของตัวเองหลังรับ event
+- ไม่มี global soundpad state สำหรับ is_playing
 
 ### Rate Limits
 | action | limit |
@@ -257,13 +308,10 @@ if removeIdx < state.CurrentIndex {
 select {
 case <-ticker.C:
     t.tick()
-case <-t.stopCh: // ← ขาดนี้ = goroutine leak
+case <-t.stopCh:
     return
 }
 ```
-
-### Hub Client ID
-ใช้ UUID (ไม่ใช่ RemoteAddr) เก็บใน `session.Set("client_id", ...)` ตอน Register
 
 ### Migration Guard (store/redis.go)
 songs เก่าที่ไม่มี `queue_id` จะถูก backfill เป็น `videoID_index` อัตโนมัติใน `GetState`
