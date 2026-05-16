@@ -21,9 +21,9 @@ type Vote struct {
 	ExpiresAt     int64      `json:"expires_at"`     // Unix milliseconds
 }
 
-// Required คืนจำนวน yes votes ขั้นต่ำที่ต้องการ (เกินครึ่ง)
+// Required คืนจำนวน yes votes ขั้นต่ำที่ต้องการ (ครึ่งขึ้นไป, ceil)
 func (v *Vote) Required() int {
-	return v.TotalAtStart/2 + 1
+	return (v.TotalAtStart + 1) / 2
 }
 
 // HasVoted ตรวจว่า userID โหวตแล้วหรือยัง

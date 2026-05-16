@@ -190,6 +190,10 @@ func HandleRemoveSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage
 	}
 
 	song := state.CurrentQueue[removeIdx]
+	if song.AddedBy == client.User.Username {
+		executeRemoveSong(h, client, payload.SongID)
+		return
+	}
 	executed, err := startVote(h, client, model.VoteActionRemoveSong, song.QueueID, song.Title)
 	if err != nil {
 		log.Error().Err(err).Msg("HandleRemoveSong: failed to start vote")
@@ -422,6 +426,10 @@ func HandleSkipSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 		return
 	}
 
+	if currentSong.AddedBy == client.User.Username {
+		executeSkipSong(h, client, payload.SongID)
+		return
+	}
 	executed, err := startVote(h, client, model.VoteActionSkipSong, currentSong.QueueID, currentSong.Title)
 	if err != nil {
 		log.Error().Err(err).Msg("HandleSkipSong: failed to start vote")
