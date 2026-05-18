@@ -320,14 +320,23 @@ func (a *Handler) handlePublicTopSpenders(w http.ResponseWriter, r *http.Request
 }
 
 // broadcastTopSpenders broadcast top_spenders_updated ไปทุกห้อง
-func (a *Handler) broadcastTopSpenders(ctx context.Context) {
+// newSpender ใส่ข้อมูลคนที่เพิ่งโดเนท (nil = แค่ refresh ไม่ต้อง announce)
+func (a *Handler) broadcastTopSpenders(ctx context.Context, newSpender *model.TopSpender) {
 	spenders, err := a.s.GetTopSpenders(ctx)
 	if err != nil {
 		return
 	}
-	a.h.BroadcastToAll("top_spenders_updated", map[string]interface{}{
+	payload := map[string]interface{}{
 		"spenders": mergeTopSpenders(spenders),
-	})
+	}
+	if newSpender != nil {
+		payload["action"] = "donated"
+		payload["new_spender"] = map[string]interface{}{
+			"name":   newSpender.Name,
+			"amount": newSpender.Amount,
+		}
+	}
+	a.h.BroadcastToAll("top_spenders_updated", payload)
 }
 
 // GET/POST/PUT/DELETE /admin/top-spenders — CRUD top spenders
@@ -359,7 +368,7 @@ func (a *Handler) handleTopSpenders(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "failed to save", http.StatusInternalServerError)
 			return
 		}
-		a.broadcastTopSpenders(ctx)
+		a.broadcastTopSpenders(ctx, &body)
 		jsonOK(w, body)
 
 	case http.MethodPut:
@@ -385,7 +394,7 @@ func (a *Handler) handleTopSpenders(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "failed to save", http.StatusInternalServerError)
 			return
 		}
-		a.broadcastTopSpenders(ctx)
+		a.broadcastTopSpenders(ctx, nil)
 		jsonOK(w, body)
 
 	case http.MethodDelete:
@@ -405,7 +414,7 @@ func (a *Handler) handleTopSpenders(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "failed to save", http.StatusInternalServerError)
 			return
 		}
-		a.broadcastTopSpenders(ctx)
+		a.broadcastTopSpenders(ctx, nil)
 		jsonOK(w, map[string]string{"status": "deleted"})
 
 	default:
