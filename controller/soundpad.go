@@ -11,6 +11,7 @@ import (
 	"github.com/synctune/backend/broadcaster"
 	"github.com/synctune/backend/hub"
 	"github.com/synctune/backend/model"
+	"github.com/synctune/backend/tiktok"
 )
 
 const maxSoundPadTitleLen = 100
@@ -18,6 +19,7 @@ const maxSoundPadTitleLen = 100
 type soundPadSetPayload struct {
 	Slot     int    `json:"slot"`
 	VideoID  string `json:"video_id"`
+	VideoURL string `json:"video_url"` // short URL สำหรับ TikTok — backend resolve เป็น video_id
 	Title    string `json:"title"`
 	Platform string `json:"platform"` // "youtube" | "tiktok"
 }
@@ -45,6 +47,18 @@ func HandleSoundPadSet(h *hub.Hub, client *hub.Client, rawPayload json.RawMessag
 	}
 	isTikTok := payload.Slot >= model.TikTokSlotStart
 	if isTikTok {
+		// ถ้าส่ง video_url มา (short URL) ให้ resolve ก่อน
+		if payload.VideoID == "" && payload.VideoURL != "" {
+			id, err := tiktok.ExtractVideoID(payload.VideoURL)
+			if err != nil {
+				h.SendToSession(client.Conn, "error", model.WSError{Code: "INVALID_URL", Message: "ไม่สามารถดึง TikTok Video ID จาก URL ได้"})
+				return
+			}
+			payload.VideoID = id
+			if payload.Title == "" {
+				payload.Title = "TikTok " + id
+			}
+		}
 		// TikTok video ID คือตัวเลข 1–25 หลัก
 		if len(payload.VideoID) < 1 || len(payload.VideoID) > 25 {
 			return
