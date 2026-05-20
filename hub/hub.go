@@ -41,6 +41,13 @@ type Hub struct {
 	store          store.Store
 	broadcastCh    chan broadcastMsg
 	messageHandler func(client *Client, msg model.WSMessage)
+	voteMu         sync.Map // roomID → *sync.Mutex (per-room vote lock)
+}
+
+// VoteMutex คืน mutex สำหรับ vote operations ของห้องนั้น (สร้างใหม่ถ้ายังไม่มี)
+func (h *Hub) VoteMutex(roomID string) *sync.Mutex {
+	mu, _ := h.voteMu.LoadOrStore(roomID, &sync.Mutex{})
+	return mu.(*sync.Mutex)
 }
 
 type broadcastMsg struct {

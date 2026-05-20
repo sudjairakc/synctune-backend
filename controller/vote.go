@@ -81,6 +81,10 @@ func HandleVoteCast(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 	ctx := context.Background()
 	roomID := client.RoomID
 
+	mu := h.VoteMutex(roomID)
+	mu.Lock()
+	defer mu.Unlock()
+
 	vote, err := h.Store().GetVote(ctx, roomID)
 	if err != nil {
 		log.Error().Err(err).Msg("HandleVoteCast: failed to get vote")
