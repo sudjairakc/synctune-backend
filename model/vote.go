@@ -4,8 +4,9 @@ package model
 type VoteAction string
 
 const (
-	VoteActionRemoveSong VoteAction = "remove_song"
-	VoteActionSkipSong   VoteAction = "skip_song"
+	VoteActionRemoveSong    VoteAction = "remove_song"
+	VoteActionSkipSong      VoteAction = "skip_song"
+	VoteActionSkipBroadcast VoteAction = "skip_broadcast" // ทุกคนต้องโหวต (unanimous)
 )
 
 // Vote แทน 1 การโหวตที่กำลัง active ในห้อง
@@ -21,8 +22,12 @@ type Vote struct {
 	ExpiresAt     int64      `json:"expires_at"`     // Unix milliseconds
 }
 
-// Required คืนจำนวน yes votes ขั้นต่ำที่ต้องการ (ครึ่งขึ้นไป, ceil)
+// Required คืนจำนวน yes votes ขั้นต่ำที่ต้องการ
+// skip_broadcast ต้องการ unanimous (ทุกคน), อื่นๆ ใช้ majority (ceil)
 func (v *Vote) Required() int {
+	if v.Action == VoteActionSkipBroadcast {
+		return v.TotalAtStart
+	}
 	return (v.TotalAtStart + 1) / 2
 }
 

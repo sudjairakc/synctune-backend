@@ -119,5 +119,37 @@ func resolveVote(h *hub.Hub, client *hub.Client, vote *model.Vote) {
 		executeRemoveSong(h, client, vote.SongQueueID)
 	case model.VoteActionSkipSong:
 		executeSkipSong(h, client, vote.SongQueueID)
+	case model.VoteActionSkipBroadcast:
+		executeBroadcastSkip(h, client.RoomID)
 	}
+}
+
+// executeBroadcastSkip คืน state ก่อน broadcast หลัง skip vote ผ่าน (unanimous)
+func executeBroadcastSkip(h *hub.Hub, roomID string) {
+	ctx := context.Background()
+	state, err := h.Store().GetState(ctx, roomID)
+	if err != nil || !state.IsBroadcasting {
+		return
+	}
+
+	state.CurrentQueue = state.SavedQueue
+	state.CurrentIndex = state.SavedCurrentIndex
+	state.SeekTime = state.SavedSeekTime
+	state.IsPlaying = state.SavedIsPlaying
+	state.IsBroadcasting = false
+	state.BroadcastQueue = nil
+	state.BroadcastPlaybackStartedUnix = 0
+	state.BroadcastVoteReplayDone = false
+	state.BroadcastSkipLocked = false
+	state.SavedQueue = nil
+	state.SavedIsPlaying = false
+
+	if err := h.Store().SetState(ctx, roomID, state); err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Msg("executeBroadcastSkip: failed to set state")
+		return
+	}
+
+	log.Info().Str("room_id", roomID).Msg("broadcast: skip vote passed, state restored")
+	history, _ := h.Store().GetHistory(ctx, roomID)
+	broadcaster.BroadcastQueueUpdated(h, roomID, state, history)
 }

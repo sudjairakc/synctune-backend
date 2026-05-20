@@ -467,6 +467,12 @@ func HandleSkipSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 		return
 	}
 
+	// ระหว่าง broadcast replay — ล็อก skip สำหรับ user ทั่วไป (admin ข้ามผ่าน HTTP endpoint)
+	if currentSong.IsBroadcast && state.BroadcastSkipLocked {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "BROADCAST_LOCKED", Message: "ไม่สามารถข้ามได้ระหว่าง broadcast replay"})
+		return
+	}
+
 	if currentSong.AddedBy == client.User.Username {
 		executeSkipSong(h, client, payload.SongID)
 		return
@@ -582,19 +588,39 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 		log.Error().Err(err).Msg("HandleSongEnded: failed to push history")
 	}
 
-	// broadcast song จบ — restore หรือเล่น broadcast ถัดไป
+	// broadcast song จบ — replay ครั้งแรก (ถ้า vote ไม่ผ่าน) หรือ restore หลัง replay
 	if currentSong.IsBroadcast {
 		state.SeekTime = 0
 		if len(state.BroadcastQueue) > 0 {
+			// มี broadcast ถัดไปรอ
 			next := state.BroadcastQueue[0]
 			state.BroadcastQueue = state.BroadcastQueue[1:]
 			state.CurrentQueue = []model.Song{next}
 			state.CurrentIndex = 0
 			state.IsPlaying = true
 			state.BroadcastPlaybackStartedUnix = time.Now().Unix()
+			state.BroadcastVoteReplayDone = false
+			state.BroadcastSkipLocked = false
+		} else if !state.BroadcastVoteReplayDone {
+			// รอบแรกจบ — vote ไม่ผ่าน ให้เล่นซ้ำ 1 รอบ (locked)
+			state.BroadcastVoteReplayDone = true
+			state.BroadcastSkipLocked = true
+			state.BroadcastPlaybackStartedUnix = time.Now().Unix()
+			// เก็บเพลงเดิมไว้ ไม่เปลี่ยน CurrentQueue
+			if err := h.Store().SetState(ctx, roomID, state); err != nil {
+				log.Error().Err(err).Msg("HandleSongEnded(broadcast replay): failed to set state")
+				return
+			}
+			log.Info().Str("event", "song_ended").Str("room_id", roomID).Str("song_id", currentSong.ID).Msg("broadcast: vote not passed, replaying once (locked)")
+			broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
+			h.BroadcastToRoom(roomID, "broadcast_replay", struct{}{})
+			return
 		} else {
+			// replay จบ — restore state
 			state.IsBroadcasting = false
 			state.BroadcastPlaybackStartedUnix = 0
+			state.BroadcastVoteReplayDone = false
+			state.BroadcastSkipLocked = false
 			state.CurrentQueue = state.SavedQueue
 			state.CurrentIndex = state.SavedCurrentIndex
 			state.SeekTime = state.SavedSeekTime

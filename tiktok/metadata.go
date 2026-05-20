@@ -14,9 +14,10 @@ import (
 var httpClient = &http.Client{
 	Timeout: 10 * time.Second,
 	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 5 {
+		if len(via) >= 10 {
 			return fmt.Errorf("too many redirects")
 		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 		return nil
 	},
 }
@@ -55,7 +56,12 @@ func IsValidURL(rawURL string) bool {
 
 // resolveShortURL follows redirects และคืน final URL
 func resolveShortURL(rawURL string) (string, error) {
-	resp, err := httpClient.Get(rawURL)
+	req, err := http.NewRequest("GET", rawURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("resolveShortURL: build request: %w", err)
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("resolveShortURL: %w", err)
 	}
@@ -90,7 +96,15 @@ func ExtractVideoID(rawURL string) (string, error) {
 				}
 			}
 		}
-		return "", fmt.Errorf("no video id found in path: %s", u.Path)
+		// path ไม่มี /video/ (เช่น /t/ZT8xxx) — ลอง resolve redirect
+		resolved, err := resolveShortURL(rawURL)
+		if err != nil {
+			return "", fmt.Errorf("no video id found in path: %s", u.Path)
+		}
+		if resolved == rawURL {
+			return "", fmt.Errorf("no video id found in path: %s", u.Path)
+		}
+		return ExtractVideoID(resolved)
 	default:
 		return "", fmt.Errorf("unsupported tiktok host: %s", u.Host)
 	}

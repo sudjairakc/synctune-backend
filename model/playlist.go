@@ -41,6 +41,8 @@ type PlaylistState struct {
 	SavedCurrentIndex            int    `json:"saved_current_index,omitempty"`
 	SavedSeekTime                int    `json:"saved_seek_time,omitempty"`
 	SavedIsPlaying               bool   `json:"saved_is_playing,omitempty"`
+	BroadcastVoteReplayDone      bool   `json:"broadcast_vote_replay_done,omitempty"` // true หลังเล่นรอบแรกจบ (replay แล้ว)
+	BroadcastSkipLocked          bool   `json:"broadcast_skip_locked,omitempty"`      // true ระหว่าง replay — user ทั่วไป skip ไม่ได้
 }
 
 // SoundPadSlot แทน 1 slot ของ Sound Pad (nil = ว่าง)

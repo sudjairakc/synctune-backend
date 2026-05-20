@@ -22,6 +22,8 @@ import (
 
 var videoIDRegex = regexp.MustCompile(`^[\w-]{11}$`)
 
+const broadcastVoteTTL = 20 * time.Second
+
 // Scheduler จัดการ dynamic broadcast schedules
 type Scheduler struct {
 	mu     sync.Mutex
@@ -227,6 +229,8 @@ func triggerInRoom(h *hub.Hub, s store.Store, roomID string, song model.Song) {
 	state.SeekTime = 0
 	state.IsPlaying = true
 	state.BroadcastPlaybackStartedUnix = time.Now().Unix()
+	state.BroadcastVoteReplayDone = false
+	state.BroadcastSkipLocked = false
 
 	if err := s.SetState(ctx, roomID, state); err != nil {
 		log.Error().Err(err).Str("room_id", roomID).Msg("broadcast: failed to set state")
@@ -237,6 +241,8 @@ func triggerInRoom(h *hub.Hub, s store.Store, roomID string, song model.Song) {
 
 	history, _ := s.GetHistory(ctx, roomID)
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, history)
+
+	startBroadcastSkipVote(h, s, roomID)
 }
 
 // restoreSavedState คืน state ก่อน broadcast สำหรับ admin skip
@@ -258,6 +264,39 @@ func restoreSavedState(h *hub.Hub, s store.Store, roomID string, state *model.Pl
 	log.Info().Str("room_id", roomID).Msg("broadcast: admin skipped broadcast, state restored")
 	history, _ := s.GetHistory(ctx, roomID)
 	broadcaster.BroadcastQueueUpdated(h, roomID, state, history)
+}
+
+// startBroadcastSkipVote สร้าง vote unanimous สำหรับให้ user ข้าม broadcast
+func startBroadcastSkipVote(h *hub.Hub, s store.Store, roomID string) {
+	ctx := context.Background()
+
+	existing, err := s.GetVote(ctx, roomID)
+	if err != nil || existing != nil {
+		return
+	}
+
+	online := h.OnlineUsersInRoom(roomID)
+	total := len(online)
+	if total == 0 {
+		return
+	}
+
+	vote := &model.Vote{
+		ID:           uuid.New().String(),
+		Action:       model.VoteActionSkipBroadcast,
+		InitiatedBy:  "Broadcast",
+		YesVoterIDs:  []string{},
+		TotalAtStart: total,
+		ExpiresAt:    time.Now().Add(broadcastVoteTTL).UnixMilli(),
+	}
+
+	if err := s.SetVote(ctx, roomID, vote, broadcastVoteTTL); err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Msg("broadcast: failed to start skip vote")
+		return
+	}
+
+	log.Info().Str("room_id", roomID).Str("vote_id", vote.ID).Int("total", total).Msg("broadcast: skip vote started")
+	broadcaster.BroadcastVoteStarted(h, roomID, vote)
 }
 
 // --- helpers ---
