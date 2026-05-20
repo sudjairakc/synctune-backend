@@ -5,11 +5,12 @@ import "encoding/json"
 // Song แทนเพลง 1 รายการในคิว
 type Song struct {
 	QueueID     string `json:"queue_id"`               // Unique ID ต่อ queue slot (UUID) — ใช้สำหรับ remove/reorder/skip
-	ID          string `json:"id"`                     // YouTube Video ID (11 chars) — ใช้สำหรับเล่นใน player
+	ID          string `json:"id"`                     // Video ID — YouTube 11 chars, TikTok numeric string
 	Title       string `json:"title"`                  // ชื่อเพลง
-	Thumbnail   string `json:"thumbnail"`              // Thumbnail URL (maxresdefault หรือ hqdefault)
+	Thumbnail   string `json:"thumbnail"`              // Thumbnail URL
 	AddedBy     string `json:"added_by"`               // ชื่อผู้เพิ่ม
 	Duration    int    `json:"duration"`               // ความยาว (วินาที), 0 = ไม่ทราบ
+	Platform    string `json:"platform,omitempty"`     // "youtube" | "tiktok" (omit = youtube สำหรับ backward compat)
 	IsBroadcast bool   `json:"is_broadcast,omitempty"` // true = เพลงนี้เป็น scheduled broadcast
 	IsLive      bool   `json:"is_live,omitempty"`      // true = YouTube live stream (ไม่ seek)
 }

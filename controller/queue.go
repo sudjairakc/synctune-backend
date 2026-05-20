@@ -17,6 +17,7 @@ import (
 	"github.com/synctune/backend/hub"
 	"github.com/synctune/backend/model"
 	"github.com/synctune/backend/store"
+	"github.com/synctune/backend/tiktok"
 	"github.com/synctune/backend/youtube"
 )
 
@@ -24,7 +25,9 @@ import (
 const minBroadcastWallBeforeSongEndedSec int64 = 4
 
 // addSongPayload คือ Payload ของ event add_song
+// video_url รองรับทั้ง YouTube และ TikTok; youtube_url ไว้ backward compat
 type addSongPayload struct {
+	VideoURL   string `json:"video_url"`
 	YoutubeURL string `json:"youtube_url"`
 	AddedBy    string `json:"added_by"`
 }
@@ -87,15 +90,36 @@ func HandleAddSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		return
 	}
 
-	if !isValidYouTubeURL(payload.YoutubeURL) {
-		h.SendToSession(client.Conn, "error", model.WSError{Code: "INVALID_URL", Message: "URL ไม่ถูกต้อง กรุณาใช้ YouTube URL"})
+	rawURL := strings.TrimSpace(payload.VideoURL)
+	if rawURL == "" {
+		rawURL = strings.TrimSpace(payload.YoutubeURL)
+	}
+	if rawURL == "" {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "INVALID_URL", Message: "กรุณาใส่ URL"})
 		return
 	}
 
-	videoID, err := extractVideoID(payload.YoutubeURL)
-	if err != nil {
-		h.SendToSession(client.Conn, "error", model.WSError{Code: "INVALID_URL", Message: "ไม่สามารถดึง Video ID จาก URL ได้"})
-		return
+	var videoID, platform string
+	if tiktok.IsValidURL(rawURL) {
+		id, err := tiktok.ExtractVideoID(rawURL)
+		if err != nil {
+			h.SendToSession(client.Conn, "error", model.WSError{Code: "INVALID_URL", Message: "ไม่สามารถดึง TikTok Video ID จาก URL ได้"})
+			return
+		}
+		videoID = id
+		platform = "tiktok"
+	} else {
+		if !isValidYouTubeURL(rawURL) {
+			h.SendToSession(client.Conn, "error", model.WSError{Code: "INVALID_URL", Message: "URL ไม่ถูกต้อง กรุณาใช้ YouTube หรือ TikTok URL"})
+			return
+		}
+		id, err := extractVideoID(rawURL)
+		if err != nil {
+			h.SendToSession(client.Conn, "error", model.WSError{Code: "INVALID_URL", Message: "ไม่สามารถดึง Video ID จาก URL ได้"})
+			return
+		}
+		videoID = id
+		platform = "youtube"
 	}
 
 	addedBy := client.User.Username
@@ -123,22 +147,39 @@ func HandleAddSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		return
 	}
 
-	meta, err := youtube.FetchMetadata(videoID)
-	if err != nil {
-		log.Warn().Err(err).Str("video_id", videoID).Msg("HandleAddSong: failed to fetch metadata, using fallback")
-		meta = &youtube.VideoMetadata{
-			Title:     videoID,
-			Thumbnail: "https://i.ytimg.com/vi/" + videoID + "/hqdefault.jpg",
+	var songTitle, songThumbnail string
+	var isLive bool
+	if platform == "tiktok" {
+		tikMeta, err := tiktok.FetchMetadata(videoID)
+		if err != nil {
+			log.Warn().Err(err).Str("video_id", videoID).Msg("HandleAddSong: failed to fetch tiktok metadata, using fallback")
+			songTitle = videoID
+			songThumbnail = ""
+		} else {
+			songTitle = tikMeta.Title
+			songThumbnail = tikMeta.Thumbnail
+		}
+	} else {
+		meta, err := youtube.FetchMetadata(videoID)
+		if err != nil {
+			log.Warn().Err(err).Str("video_id", videoID).Msg("HandleAddSong: failed to fetch metadata, using fallback")
+			songTitle = videoID
+			songThumbnail = "https://i.ytimg.com/vi/" + videoID + "/hqdefault.jpg"
+		} else {
+			songTitle = meta.Title
+			songThumbnail = meta.Thumbnail
+			isLive = isLiveYouTubeURL(rawURL) || meta.LikelyBroadcastLive
 		}
 	}
 
 	song := model.Song{
 		QueueID:   uuid.New().String(),
 		ID:        videoID,
-		Title:     meta.Title,
-		Thumbnail: meta.Thumbnail,
+		Title:     songTitle,
+		Thumbnail: songThumbnail,
 		AddedBy:   addedBy,
-		IsLive:    isLiveYouTubeURL(payload.YoutubeURL) || meta.LikelyBroadcastLive,
+		Platform:  platform,
+		IsLive:    isLive,
 	}
 	state.CurrentQueue = append(state.CurrentQueue, song)
 
