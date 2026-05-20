@@ -44,11 +44,13 @@ type PlaylistState struct {
 
 // SoundPadSlot แทน 1 slot ของ Sound Pad (nil = ว่าง)
 type SoundPadSlot struct {
-	VideoID string `json:"video_id"`
-	Title   string `json:"title"`
+	VideoID  string `json:"video_id"`
+	Title    string `json:"title"`
+	Platform string `json:"platform"` // "youtube" | "tiktok"
 }
 
-const SoundPadSize = 50
+const SoundPadSize = 70    // 0–49 = YouTube, 50–69 = TikTok
+const TikTokSlotStart = 50
 
 // SoundPadPlayEvent บันทึกการกด soundpad แต่ละครั้ง
 type SoundPadPlayEvent struct {

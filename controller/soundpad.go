@@ -16,9 +16,10 @@ import (
 const maxSoundPadTitleLen = 100
 
 type soundPadSetPayload struct {
-	Slot    int    `json:"slot"`
-	VideoID string `json:"video_id"`
-	Title   string `json:"title"`
+	Slot     int    `json:"slot"`
+	VideoID  string `json:"video_id"`
+	Title    string `json:"title"`
+	Platform string `json:"platform"` // "youtube" | "tiktok"
 }
 
 type soundPadClearPayload struct {
@@ -42,8 +43,19 @@ func HandleSoundPadSet(h *hub.Hub, client *hub.Client, rawPayload json.RawMessag
 	if payload.Slot < 0 || payload.Slot >= model.SoundPadSize {
 		return
 	}
-	if len(payload.VideoID) != 11 {
-		return
+	isTikTok := payload.Slot >= model.TikTokSlotStart
+	if isTikTok {
+		// TikTok video ID คือตัวเลข 1–25 หลัก
+		if len(payload.VideoID) < 1 || len(payload.VideoID) > 25 {
+			return
+		}
+		payload.Platform = "tiktok"
+	} else {
+		// YouTube video ID = 11 ตัวอักษรเสมอ
+		if len(payload.VideoID) != 11 {
+			return
+		}
+		payload.Platform = "youtube"
 	}
 	if utf8.RuneCountInString(payload.Title) > maxSoundPadTitleLen {
 		payload.Title = string([]rune(payload.Title)[:maxSoundPadTitleLen])
@@ -55,7 +67,7 @@ func HandleSoundPadSet(h *hub.Hub, client *hub.Client, rawPayload json.RawMessag
 		log.Error().Err(err).Msg("HandleSoundPadSet: failed to get pad")
 		return
 	}
-	pad[payload.Slot] = &model.SoundPadSlot{VideoID: payload.VideoID, Title: payload.Title}
+	pad[payload.Slot] = &model.SoundPadSlot{VideoID: payload.VideoID, Title: payload.Title, Platform: payload.Platform}
 	if err := h.Store().SetSoundPad(ctx, client.RoomID, pad); err != nil {
 		log.Error().Err(err).Msg("HandleSoundPadSet: failed to save pad")
 		return
