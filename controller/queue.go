@@ -473,6 +473,26 @@ func HandleSkipSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 		return
 	}
 
+	if currentSong.IsBroadcast {
+		settings, err := h.Store().GetSettings(ctx)
+		if err != nil {
+			settings = &model.AppSettings{}
+		}
+		if !settings.AllowSkipBroadcast {
+			h.SendToSession(client.Conn, "error", model.WSError{Code: "BROADCAST_SKIP_DISABLED", Message: "admin ปิดการ skip broadcast"})
+			return
+		}
+		executed, err := startVote(h, client, model.VoteActionSkipBroadcast, currentSong.QueueID, currentSong.Title)
+		if err != nil {
+			log.Error().Err(err).Msg("HandleSkipSong: failed to start broadcast vote")
+			return
+		}
+		if executed {
+			executeSkipSong(h, client, payload.SongID)
+		}
+		return
+	}
+
 	if currentSong.AddedBy == client.User.Username {
 		executeSkipSong(h, client, payload.SongID)
 		return

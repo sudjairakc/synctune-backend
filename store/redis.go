@@ -85,6 +85,10 @@ type Store interface {
 	SetVote(ctx context.Context, roomID string, vote *model.Vote, ttl time.Duration) error
 	// DeleteVote ลบ Vote ออกจากห้อง
 	DeleteVote(ctx context.Context, roomID string) error
+	// GetSettings โหลด global app settings
+	GetSettings(ctx context.Context) (*model.AppSettings, error)
+	// SetSettings บันทึก global app settings
+	SetSettings(ctx context.Context, s *model.AppSettings) error
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -653,6 +657,36 @@ func (s *RedisStore) SetVote(ctx context.Context, roomID string, vote *model.Vot
 func (s *RedisStore) DeleteVote(ctx context.Context, roomID string) error {
 	if err := s.client.Del(ctx, roomVoteKey(roomID)).Err(); err != nil {
 		return fmt.Errorf("DeleteVote: redis DEL: %w", err)
+	}
+	return nil
+}
+
+const settingsKey = "synctune:settings"
+
+// GetSettings โหลด global app settings
+func (s *RedisStore) GetSettings(ctx context.Context) (*model.AppSettings, error) {
+	data, err := s.client.Get(ctx, settingsKey).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return &model.AppSettings{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetSettings: redis GET: %w", err)
+	}
+	var settings model.AppSettings
+	if err := json.Unmarshal(data, &settings); err != nil {
+		return nil, fmt.Errorf("GetSettings: unmarshal: %w", err)
+	}
+	return &settings, nil
+}
+
+// SetSettings บันทึก global app settings
+func (s *RedisStore) SetSettings(ctx context.Context, settings *model.AppSettings) error {
+	data, err := json.Marshal(settings)
+	if err != nil {
+		return fmt.Errorf("SetSettings: marshal: %w", err)
+	}
+	if err := s.client.Set(ctx, settingsKey, data, 0).Err(); err != nil {
+		return fmt.Errorf("SetSettings: redis SET: %w", err)
 	}
 	return nil
 }

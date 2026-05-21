@@ -43,6 +43,7 @@ func (a *Handler) Register(mux *http.ServeMux) {
 	mux.Handle("/admin/schedules/trigger", a.auth(http.HandlerFunc(a.handleTrigger)))
 	mux.Handle("/admin/broadcast/skip", a.auth(http.HandlerFunc(a.handleSkipBroadcast)))
 	mux.Handle("/admin/top-spenders", a.auth(http.HandlerFunc(a.handleTopSpenders)))
+	mux.Handle("/admin/settings", a.auth(http.HandlerFunc(a.handleSettings)))
 	mux.HandleFunc("/top-spenders", a.handlePublicTopSpenders)
 }
 
@@ -262,6 +263,37 @@ func (a *Handler) handleTrigger(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Info().Str("url", body.YoutubeURL).Msg("admin: triggered broadcast")
 	jsonOK(w, map[string]string{"status": "triggered"})
+}
+
+// GET/POST /admin/settings — อ่านหรืออัปเดต global app settings
+func (a *Handler) handleSettings(w http.ResponseWriter, r *http.Request) {
+	ctx := context.Background()
+	switch r.Method {
+	case http.MethodGet:
+		settings, err := a.s.GetSettings(ctx)
+		if err != nil {
+			jsonError(w, "failed to load settings", http.StatusInternalServerError)
+			return
+		}
+		jsonOK(w, settings)
+
+	case http.MethodPost:
+		var body model.AppSettings
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			jsonError(w, "invalid body", http.StatusBadRequest)
+			return
+		}
+		if err := a.s.SetSettings(ctx, &body); err != nil {
+			jsonError(w, "failed to save settings", http.StatusInternalServerError)
+			return
+		}
+		a.h.BroadcastToAll("settings_updated", body)
+		log.Info().Bool("allow_skip_broadcast", body.AllowSkipBroadcast).Msg("admin: settings updated")
+		jsonOK(w, body)
+
+	default:
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
 }
 
 // POST /admin/broadcast/skip — skip broadcast ที่กำลังเล่นในทุกห้อง

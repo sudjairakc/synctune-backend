@@ -124,10 +124,14 @@ func HandleJoin(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	if err != nil {
 		soundPadHistory = []model.SoundPadPlayEvent{}
 	}
+	settings, err := h.Store().GetSettings(ctx)
+	if err != nil {
+		settings = &model.AppSettings{}
+	}
 
 	log.Info().Str("event", "join").Str("user_id", user.ID).Str("username", user.Username).Str("room_id", roomID).Msg("user joined room")
 
-	broadcaster.SendRoomJoined(h, client.Conn, roomID, state, history, chatHistory, h.OnlineUsersInRoom(roomID), soundPad, soundPadHistory)
+	broadcaster.SendRoomJoined(h, client.Conn, roomID, state, history, chatHistory, h.OnlineUsersInRoom(roomID), soundPad, soundPadHistory, settings.AllowSkipBroadcast)
 	broadcaster.BroadcastUserJoined(h, roomID, user, h.OnlineUsersInRoom(roomID))
 
 	// ส่ง pins ปัจจุบันให้ client ที่ join

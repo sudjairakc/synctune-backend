@@ -61,10 +61,11 @@ type roomJoinedPayload struct {
 	RandomPlay   bool                  `json:"random_play"`
 	History      []model.HistorySong   `json:"history"`
 	ChatHistory  []model.ChatMessage   `json:"chat_history"`
-	OnlineUsers   []model.User          `json:"online_users"`
-	SoundPad        []*model.SoundPadSlot      `json:"sound_pad"`
-	SoundPadHistory []model.SoundPadPlayEvent  `json:"soundpad_history"`
-	PlaybackSpeed   float64                    `json:"playback_speed"`
+	OnlineUsers         []model.User               `json:"online_users"`
+	SoundPad            []*model.SoundPadSlot      `json:"sound_pad"`
+	SoundPadHistory     []model.SoundPadPlayEvent  `json:"soundpad_history"`
+	PlaybackSpeed       float64                    `json:"playback_speed"`
+	AllowSkipBroadcast  bool                       `json:"allow_skip_broadcast"`
 }
 
 // playbackModePayload คือ Payload ของ event playback_mode_updated
@@ -116,26 +117,27 @@ func BroadcastSongSkipped(h hubInterface, roomID string, song model.Song, errorC
 }
 
 // SendRoomJoined ส่ง event "room_joined" ไปยัง Client ที่เพิ่ง join (ไม่ Broadcast)
-func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot, soundPadHistory []model.SoundPadPlayEvent) {
+func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot, soundPadHistory []model.SoundPadPlayEvent, allowSkipBroadcast bool) {
 	speed := state.PlaybackSpeed
 	if speed == 0 {
 		speed = 1
 	}
 	h.SendToSession(session, "room_joined", roomJoinedPayload{
-		RoomID:        roomID,
-		CurrentQueue:  state.CurrentQueue,
-		CurrentIndex:  state.CurrentIndex,
-		SeekTime:      state.SeekTime,
-		IsPlaying:     state.IsPlaying,
-		Autoplay:      state.Autoplay,
-		Shuffle:       state.Shuffle,
-		RandomPlay:    state.RandomPlay,
-		History:       history,
-		ChatHistory:   chatHistory,
-		OnlineUsers:   onlineUsers,
-		SoundPad:        soundPad,
-		SoundPadHistory: soundPadHistory,
-		PlaybackSpeed:   speed,
+		RoomID:             roomID,
+		CurrentQueue:       state.CurrentQueue,
+		CurrentIndex:       state.CurrentIndex,
+		SeekTime:           state.SeekTime,
+		IsPlaying:          state.IsPlaying,
+		Autoplay:           state.Autoplay,
+		Shuffle:            state.Shuffle,
+		RandomPlay:         state.RandomPlay,
+		History:            history,
+		ChatHistory:        chatHistory,
+		OnlineUsers:        onlineUsers,
+		SoundPad:           soundPad,
+		SoundPadHistory:    soundPadHistory,
+		PlaybackSpeed:      speed,
+		AllowSkipBroadcast: allowSkipBroadcast,
 	})
 }
 
