@@ -482,6 +482,10 @@ func HandleSkipSong(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 			h.SendToSession(client.Conn, "error", model.WSError{Code: "BROADCAST_SKIP_DISABLED", Message: "admin ปิดการ skip broadcast"})
 			return
 		}
+		if currentSong.Duration > 0 && state.SeekTime >= currentSong.Duration/2 {
+			h.SendToSession(client.Conn, "error", model.WSError{Code: "BROADCAST_SKIP_TOO_LATE", Message: "ไม่สามารถ skip ได้หลังจากเล่นเกิน 50% ของวิดีโอแล้ว"})
+			return
+		}
 		executed, err := startVote(h, client, model.VoteActionSkipBroadcast, currentSong.QueueID, currentSong.Title)
 		if err != nil {
 			log.Error().Err(err).Msg("HandleSkipSong: failed to start broadcast vote")
