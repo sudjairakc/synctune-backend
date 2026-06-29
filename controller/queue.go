@@ -630,11 +630,12 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 			state.BroadcastVoteReplayDone = true
 			state.BroadcastSkipLocked = true
 			state.BroadcastPlaybackStartedUnix = time.Now().Unix()
-			// เก็บเพลงเดิมไว้ ไม่เปลี่ยน CurrentQueue
-			// ปล่อย claim ของ queue_id เดิม ไม่งั้น song_ended ตอน replay จบจะถูก dedup ทิ้ง → ไม่ restore (ค้างที่ broadcast)
-			if err := h.Store().ReleaseSongEnded(ctx, roomID, currentSong.QueueID); err != nil {
-				log.Error().Err(err).Msg("HandleSongEnded(broadcast replay): failed to release song_ended claim")
-			}
+			// เปลี่ยน queue_id ของเพลง replay → client เห็นเป็น "เพลงใหม่" จึง reload เล่นซ้ำจริง
+			// ผลพลอยได้: reset ตัวกันส่ง song_ended ซ้ำ (songEndedSent) ฝั่ง client → ตอน replay จบจะส่ง song_ended ได้ → restore
+			// ถ้าใช้ queue_id เดิม client จะไม่ reload และไม่ส่ง song_ended รอบสอง → ค้างที่ broadcast
+			replaySong := state.CurrentQueue[state.CurrentIndex]
+			replaySong.QueueID = replaySong.QueueID + "_replay"
+			state.CurrentQueue[state.CurrentIndex] = replaySong
 			if err := h.Store().SetState(ctx, roomID, state); err != nil {
 				log.Error().Err(err).Msg("HandleSongEnded(broadcast replay): failed to set state")
 				return

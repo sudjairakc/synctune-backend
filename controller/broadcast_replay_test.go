@@ -69,11 +69,6 @@ func (f *fakeStore) ClaimSongEnded(_ context.Context, roomID, queueID string) (b
 	return true, nil
 }
 
-func (f *fakeStore) ReleaseSongEnded(_ context.Context, roomID, queueID string) error {
-	delete(f.claims, roomID+":"+queueID)
-	return nil
-}
-
 func (f *fakeStore) GetVote(_ context.Context, roomID string) (*model.Vote, error) {
 	return f.vote[roomID], nil
 }
@@ -127,16 +122,18 @@ func TestBroadcastReplayThenRestore(t *testing.T) {
 	if !st.IsBroadcasting {
 		t.Fatalf("รอบ 1: ยังต้อง broadcasting (replay)")
 	}
-	if len(st.CurrentQueue) != 1 || st.CurrentQueue[0].QueueID != "B" {
-		t.Fatalf("รอบ 1: ควรยังเล่นเพลง B (replay), ได้ %+v", st.CurrentQueue)
+	// queue_id ต้องเปลี่ยน (เพิ่ม _replay) เพื่อให้ client reload + ส่ง song_ended รอบ replay ได้
+	if len(st.CurrentQueue) != 1 || st.CurrentQueue[0].QueueID == "B" {
+		t.Fatalf("รอบ 1: queue_id ต้องเปลี่ยนเป็นเพลง replay (ไม่ใช่ B เดิม), ได้ %+v", st.CurrentQueue)
 	}
-	if fs.claims[roomID+":B"] {
-		t.Fatalf("รอบ 1: claim ของ B ต้องถูก release แล้ว (ไม่งั้น song_ended รอบ replay จะถูก dedup ทิ้ง)")
+	if !st.CurrentQueue[0].IsBroadcast {
+		t.Fatalf("รอบ 1: เพลง replay ต้องยังเป็น broadcast")
 	}
 
-	// รอบ 2: replay จบ → ต้อง restore กลับเพลงปกติ N (นี่คือจุดที่เดิมค้าง)
+	// รอบ 2: replay จบ → client ส่ง song_ended ด้วย queue_id ใหม่ → ต้อง restore กลับเพลงปกติ N (จุดที่เดิมค้าง)
+	replayQueueID := st.CurrentQueue[0].QueueID
 	backdate(t, fs, roomID)
-	songEnded(t, h, client, "B")
+	songEnded(t, h, client, replayQueueID)
 
 	st, _ = fs.GetState(context.Background(), roomID)
 	if st.IsBroadcasting {

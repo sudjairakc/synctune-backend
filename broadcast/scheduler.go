@@ -270,6 +270,15 @@ func restoreSavedState(h *hub.Hub, s store.Store, roomID string, state *model.Pl
 func startBroadcastSkipVote(h *hub.Hub, s store.Store, roomID string) {
 	ctx := context.Background()
 
+	// admin ปิด skip broadcast → ไม่เปิด vote popup ให้ user
+	settings, err := s.GetSettings(ctx)
+	if err != nil {
+		settings = &model.AppSettings{}
+	}
+	if !settings.AllowSkipBroadcast {
+		return
+	}
+
 	existing, err := s.GetVote(ctx, roomID)
 	if err != nil || existing != nil {
 		return

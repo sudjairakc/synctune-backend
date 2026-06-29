@@ -64,8 +64,6 @@ type Store interface {
 	FlushAll(ctx context.Context) error
 	// ClaimSongEnded ใช้ SET NX เพื่อ dedup — คืน true ถ้า claim สำเร็จ (ประมวลผลได้)
 	ClaimSongEnded(ctx context.Context, roomID, queueID string) (bool, error)
-	// ReleaseSongEnded ลบ claim ของ song_ended — ให้ queue_id เดิม claim ใหม่ได้ (ใช้ตอน broadcast replay เพลงเดิม)
-	ReleaseSongEnded(ctx context.Context, roomID, queueID string) error
 	// SetRoomLastEmptied บันทึกเวลาที่ห้องว่าง (ไม่มี user) — ใช้คำนวณอายุห้องสำหรับ cleanup
 	SetRoomLastEmptied(ctx context.Context, roomID string) error
 	// ListRoomsLastEmptied คืน map roomID → เวลาที่ห้องว่างล่าสุด สำหรับ cleanup job
@@ -515,16 +513,6 @@ func (s *RedisStore) ClaimSongEnded(ctx context.Context, roomID, queueID string)
 		return false, fmt.Errorf("ClaimSongEnded: %w", err)
 	}
 	return ok, nil
-}
-
-// ReleaseSongEnded ลบ claim ของ song_ended สำหรับ queue_id หนึ่ง
-// ใช้ตอน broadcast replay เล่นเพลงเดิม (queue_id ซ้ำ) เพื่อให้ song_ended รอบใหม่ claim ได้อีก
-func (s *RedisStore) ReleaseSongEnded(ctx context.Context, roomID, queueID string) error {
-	key := "synctune:room:" + roomID + ":song_ended:" + queueID
-	if err := s.client.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("ReleaseSongEnded: %w", err)
-	}
-	return nil
 }
 
 // FlushAll ลบ keys ทั้งหมดของ synctune ออกจาก Redis (SCAN-based)
