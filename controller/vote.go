@@ -116,6 +116,22 @@ func HandleVoteCast(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) 
 	broadcaster.BroadcastVoteUpdated(h, roomID, vote)
 }
 
+// clearActiveVote ยกเลิก vote ที่ active อยู่ (ถ้ามี) แล้วแจ้งทุก client ให้ปิด modal
+// ใช้เมื่อ vote หมดความหมาย เช่น เพลงที่โหวต skip จบ/ย้าย state ไปแล้ว
+func clearActiveVote(h *hub.Hub, roomID string) {
+	ctx := context.Background()
+	vote, err := h.Store().GetVote(ctx, roomID)
+	if err != nil || vote == nil {
+		return
+	}
+	if err := h.Store().DeleteVote(ctx, roomID); err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Msg("clearActiveVote: failed to delete vote")
+		return
+	}
+	broadcaster.BroadcastVoteResolved(h, roomID, vote, "expired")
+	log.Info().Str("vote_id", vote.ID).Str("room_id", roomID).Msg("vote cleared (moot)")
+}
+
 // resolveVote execute action หลัง vote ผ่าน
 func resolveVote(h *hub.Hub, client *hub.Client, vote *model.Vote) {
 	switch vote.Action {

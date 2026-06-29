@@ -631,10 +631,16 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 			state.BroadcastSkipLocked = true
 			state.BroadcastPlaybackStartedUnix = time.Now().Unix()
 			// เก็บเพลงเดิมไว้ ไม่เปลี่ยน CurrentQueue
+			// ปล่อย claim ของ queue_id เดิม ไม่งั้น song_ended ตอน replay จบจะถูก dedup ทิ้ง → ไม่ restore (ค้างที่ broadcast)
+			if err := h.Store().ReleaseSongEnded(ctx, roomID, currentSong.QueueID); err != nil {
+				log.Error().Err(err).Msg("HandleSongEnded(broadcast replay): failed to release song_ended claim")
+			}
 			if err := h.Store().SetState(ctx, roomID, state); err != nil {
 				log.Error().Err(err).Msg("HandleSongEnded(broadcast replay): failed to set state")
 				return
 			}
+			// skip vote สำหรับเพลงนี้หมดความหมายแล้ว — ปิด modal ทุก client ทันที
+			clearActiveVote(h, roomID)
 			log.Info().Str("event", "song_ended").Str("room_id", roomID).Str("song_id", currentSong.ID).Msg("broadcast: vote not passed, replaying once (locked)")
 			broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 			h.BroadcastToRoom(roomID, "broadcast_replay", struct{}{})
@@ -656,6 +662,8 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 			log.Error().Err(err).Msg("HandleSongEnded(broadcast): failed to set state")
 			return
 		}
+		// vote ที่ค้างกับเพลง broadcast เดิมหมดความหมายแล้ว — ปิด modal ทุก client (no-op ถ้าไม่มี vote)
+		clearActiveVote(h, roomID)
 		log.Info().Str("event", "song_ended").Str("room_id", roomID).Str("song_id", currentSong.ID).Bool("is_broadcast", true).Msg("broadcast ended")
 		broadcaster.BroadcastQueueUpdated(h, roomID, state, fetchHistoryOrEmpty(ctx, h.Store(), roomID))
 		return
