@@ -614,6 +614,14 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 
 	// broadcast song จบ — replay ครั้งแรก (ถ้า vote ไม่ผ่าน) หรือ restore หลัง replay
 	if currentSong.IsBroadcast {
+		// replay เป็น feature สร้างแรงจูงใจให้ user รีบ vote skip — ผูกกับ AllowSkipBroadcast
+		// ถ้า admin ปิด skip broadcast → ไม่มี vote ให้กด → ไม่ replay (เล่นรอบเดียว restore เลย)
+		settings, err := h.Store().GetSettings(ctx)
+		if err != nil {
+			settings = &model.AppSettings{}
+		}
+		replayEnabled := settings.AllowSkipBroadcast
+
 		state.SeekTime = 0
 		if len(state.BroadcastQueue) > 0 {
 			// มี broadcast ถัดไปรอ
@@ -625,7 +633,7 @@ func HandleSongEnded(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage)
 			state.BroadcastPlaybackStartedUnix = time.Now().Unix()
 			state.BroadcastVoteReplayDone = false
 			state.BroadcastSkipLocked = false
-		} else if !state.BroadcastVoteReplayDone {
+		} else if replayEnabled && !state.BroadcastVoteReplayDone {
 			// รอบแรกจบ — vote ไม่ผ่าน ให้เล่นซ้ำ 1 รอบ (locked)
 			state.BroadcastVoteReplayDone = true
 			state.BroadcastSkipLocked = true

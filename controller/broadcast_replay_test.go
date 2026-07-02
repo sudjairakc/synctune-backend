@@ -15,19 +15,26 @@ import (
 // embed store.Store (nil) → method ที่ไม่ override จะ panic ถ้าถูกเรียก (จับ path ที่ไม่คาดคิด)
 type fakeStore struct {
 	store.Store
-	state   map[string][]byte // roomID → marshaled PlaylistState (จำลอง Redis ที่ serialize ทุกครั้ง)
-	history map[string][]model.HistorySong
-	vote    map[string]*model.Vote
-	claims  map[string]bool // "roomID:queueID" → claimed (จำลอง SET NX)
+	state    map[string][]byte // roomID → marshaled PlaylistState (จำลอง Redis ที่ serialize ทุกครั้ง)
+	history  map[string][]model.HistorySong
+	vote     map[string]*model.Vote
+	claims   map[string]bool // "roomID:queueID" → claimed (จำลอง SET NX)
+	settings model.AppSettings
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		state:   map[string][]byte{},
-		history: map[string][]model.HistorySong{},
-		vote:    map[string]*model.Vote{},
-		claims:  map[string]bool{},
+		state:    map[string][]byte{},
+		history:  map[string][]model.HistorySong{},
+		vote:     map[string]*model.Vote{},
+		claims:   map[string]bool{},
+		settings: model.AppSettings{AllowSkipBroadcast: true}, // default: replay feature เปิด
 	}
+}
+
+func (f *fakeStore) GetSettings(_ context.Context) (*model.AppSettings, error) {
+	s := f.settings
+	return &s, nil
 }
 
 func (f *fakeStore) GetState(_ context.Context, roomID string) (*model.PlaylistState, error) {
@@ -141,6 +148,38 @@ func TestBroadcastReplayThenRestore(t *testing.T) {
 	}
 	if len(st.CurrentQueue) != 1 || st.CurrentQueue[0].QueueID != "N" {
 		t.Fatalf("รอบ 2: ควร restore กลับเพลงปกติ N, ได้ %+v", st.CurrentQueue)
+	}
+}
+
+func TestBroadcastNoReplayWhenSkipDisabled(t *testing.T) {
+	const roomID = "100000"
+	fs := newFakeStore()
+	fs.settings.AllowSkipBroadcast = false // admin ปิด feature → ไม่มี incentive ให้ replay
+	h := hub.NewHub(fs)
+	client := &hub.Client{ID: "c1", RoomID: roomID, User: model.User{ID: "c1", Username: "u1"}}
+
+	// broadcast กำลังเล่นรอบแรก (ยังไม่ replay) มีเพลงปกติ N รอ restore
+	fs.state[roomID], _ = json.Marshal(&model.PlaylistState{
+		CurrentQueue:                 []model.Song{{QueueID: "B", ID: "bid", IsBroadcast: true}},
+		CurrentIndex:                 0,
+		IsPlaying:                    true,
+		IsBroadcasting:               true,
+		BroadcastVoteReplayDone:      false,
+		SavedQueue:                   []model.Song{{QueueID: "N", ID: "nid"}},
+		SavedCurrentIndex:            0,
+		SavedIsPlaying:               true,
+		BroadcastPlaybackStartedUnix: time.Now().Unix() - 100,
+	})
+
+	// เพลง broadcast จบ → skip ปิดอยู่ → ต้อง restore ทันที (ไม่ replay)
+	songEnded(t, h, client, "B")
+
+	st, _ := fs.GetState(context.Background(), roomID)
+	if st.IsBroadcasting {
+		t.Fatalf("skip ปิด: ต้องหยุด broadcast ทันที (ไม่ replay) — ยัง broadcasting = bug")
+	}
+	if len(st.CurrentQueue) != 1 || st.CurrentQueue[0].QueueID != "N" {
+		t.Fatalf("skip ปิด: ควร restore กลับเพลงปกติ N รอบเดียว, ได้ %+v", st.CurrentQueue)
 	}
 }
 
