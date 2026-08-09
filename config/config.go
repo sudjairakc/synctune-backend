@@ -47,6 +47,11 @@ func Load() *Config {
 	}
 }
 
+// LiveKitConfigured reports whether API key + secret are set for token minting.
+func (c *Config) LiveKitConfigured() bool {
+	return c != nil && c.LiveKitAPIKey != "" && c.LiveKitAPISecret != ""
+}
+
 func getEnv(key, defaultVal string) string {
 	if val := os.Getenv(key); val != "" {
 		return val

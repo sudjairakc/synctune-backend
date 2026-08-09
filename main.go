@@ -184,6 +184,8 @@ func main() {
 			controller.HandleVoiceAnswer(h, client, msg.Payload)
 		case "voice_ice":
 			controller.HandleVoiceICE(h, client, msg.Payload)
+		case "voice_token_request":
+			controller.HandleVoiceTokenRequest(h, client, msg.Payload)
 		case "soundpad_set":
 			controller.HandleSoundPadSet(h, client, msg.Payload)
 		case "soundpad_clear":
