@@ -133,6 +133,15 @@ func TestDeletePresence(t *testing.T) {
 	}
 }
 
+func TestSetPresence_EmptyConnectionIDRejected(t *testing.T) {
+	s, _ := newTestStore(t)
+	ctx := context.Background()
+	p := samplePresence("")
+	if err := s.SetPresence(ctx, "room-empty-conn", p); err == nil {
+		t.Fatal("expected error for empty connection_id")
+	}
+}
+
 func TestDeleteRoomClearsPresence(t *testing.T) {
 	s, mr := newTestStore(t)
 	ctx := context.Background()

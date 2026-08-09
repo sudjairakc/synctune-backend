@@ -4,6 +4,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 
 	"github.com/rs/zerolog/log"
@@ -12,6 +13,10 @@ import (
 	"github.com/synctune/backend/office"
 	"github.com/synctune/backend/store"
 )
+
+// errAbortPrivateInvite signals UpdatePrivateZoneState to roll back without writing
+// when the inviter is not an occupant (Watch txn cancelled via returned error).
+var errAbortPrivateInvite = errors.New("private invite: not occupant")
 
 // privateInvitePayload คือ Payload ของ event private_invite จาก client
 type privateInvitePayload struct {
@@ -59,37 +64,25 @@ func syncPrivateOccupancy(ctx context.Context, s store.Store, roomID, connection
 }
 
 func addPrivateOccupant(ctx context.Context, s store.Store, roomID, zoneID, connectionID string) {
-	st, err := s.GetPrivateZoneState(ctx, roomID, zoneID)
-	if err != nil {
-		log.Error().Err(err).Str("room_id", roomID).Str("zone_id", zoneID).Msg("addPrivateOccupant: get failed")
-		return
-	}
-	if !containsConn(st.Occupants, connectionID) {
-		st.Occupants = append(st.Occupants, connectionID)
-	}
-	st.Invites = removeConn(st.Invites, connectionID)
-	if err := s.SetPrivateZoneState(ctx, roomID, zoneID, st); err != nil {
-		log.Error().Err(err).Str("room_id", roomID).Str("zone_id", zoneID).Msg("addPrivateOccupant: set failed")
+	if err := s.UpdatePrivateZoneState(ctx, roomID, zoneID, func(st *model.PrivateZoneState) (bool, error) {
+		if !containsConn(st.Occupants, connectionID) {
+			st.Occupants = append(st.Occupants, connectionID)
+		}
+		st.Invites = removeConn(st.Invites, connectionID)
+		return false, nil
+	}); err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Str("zone_id", zoneID).Msg("addPrivateOccupant: update failed")
 	}
 }
 
 func removePrivateOccupant(ctx context.Context, s store.Store, roomID, zoneID, connectionID string) {
-	st, err := s.GetPrivateZoneState(ctx, roomID, zoneID)
-	if err != nil {
-		log.Error().Err(err).Str("room_id", roomID).Str("zone_id", zoneID).Msg("removePrivateOccupant: get failed")
-		return
-	}
-	st.Occupants = removeConn(st.Occupants, connectionID)
-	if len(st.Occupants) == 0 {
-		// clear invites when empty; drop key entirely
-		if err := s.DeletePrivateZoneState(ctx, roomID, zoneID); err != nil {
-			log.Error().Err(err).Str("room_id", roomID).Str("zone_id", zoneID).Msg("removePrivateOccupant: delete failed")
-		}
-		return
-	}
-	st.Invites = removeConn(st.Invites, connectionID)
-	if err := s.SetPrivateZoneState(ctx, roomID, zoneID, st); err != nil {
-		log.Error().Err(err).Str("room_id", roomID).Str("zone_id", zoneID).Msg("removePrivateOccupant: set failed")
+	if err := s.UpdatePrivateZoneState(ctx, roomID, zoneID, func(st *model.PrivateZoneState) (bool, error) {
+		st.Occupants = removeConn(st.Occupants, connectionID)
+		st.Invites = removeConn(st.Invites, connectionID)
+		// empty occupants → delete key (clears invites)
+		return len(st.Occupants) == 0, nil
+	}); err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Str("zone_id", zoneID).Msg("removePrivateOccupant: update failed")
 	}
 }
 
@@ -130,26 +123,35 @@ func HandlePrivateInvite(h *hub.Hub, client *hub.Client, rawPayload json.RawMess
 	}
 
 	ctx := context.Background()
-	st, err := h.Store().GetPrivateZoneState(ctx, client.RoomID, zoneID)
-	if err != nil {
-		log.Error().Err(err).Str("room_id", client.RoomID).Msg("HandlePrivateInvite: GetPrivateZoneState failed")
-		h.SendToSession(client.Conn, "error", model.WSError{Code: "INTERNAL_ERROR", Message: "ไม่สามารถเชิญได้"})
-		return
-	}
-	if !containsConn(st.Occupants, client.ID) {
+	var (
+		notOccupant bool
+		alreadyIn   bool
+	)
+	err := h.Store().UpdatePrivateZoneState(ctx, client.RoomID, zoneID, func(st *model.PrivateZoneState) (bool, error) {
+		if !containsConn(st.Occupants, client.ID) {
+			notOccupant = true
+			return false, errAbortPrivateInvite
+		}
+		if containsConn(st.Occupants, toID) {
+			alreadyIn = true
+			return false, nil
+		}
+		if !containsConn(st.Invites, toID) {
+			st.Invites = append(st.Invites, toID)
+		}
+		return false, nil
+	})
+	if err == errAbortPrivateInvite || notOccupant {
 		h.SendToSession(client.Conn, "error", model.WSError{Code: "NOT_OCCUPANT", Message: "ต้องอยู่ภายใน private zone ก่อนจึงจะเชิญได้"})
 		return
 	}
-	if containsConn(st.Occupants, toID) {
-		return // already inside — no-op
+	if err != nil {
+		log.Error().Err(err).Str("room_id", client.RoomID).Msg("HandlePrivateInvite: UpdatePrivateZoneState failed")
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "INTERNAL_ERROR", Message: "ไม่สามารถเชิญได้"})
+		return
 	}
-	if !containsConn(st.Invites, toID) {
-		st.Invites = append(st.Invites, toID)
-		if err := h.Store().SetPrivateZoneState(ctx, client.RoomID, zoneID, st); err != nil {
-			log.Error().Err(err).Str("room_id", client.RoomID).Msg("HandlePrivateInvite: SetPrivateZoneState failed")
-			h.SendToSession(client.Conn, "error", model.WSError{Code: "INTERNAL_ERROR", Message: "ไม่สามารถเชิญได้"})
-			return
-		}
+	if alreadyIn {
+		return
 	}
 
 	h.SendToClient(target.ID, "private_invite", privateInviteEventPayload{

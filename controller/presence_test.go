@@ -218,13 +218,15 @@ func TestPresenceUpdateTeleportCorrected(t *testing.T) {
 	h := hub.NewHub(fs)
 	go h.Run()
 
-	sess, _, cleanup := dialTestSession(t)
+	sess, conn, cleanup := dialTestSession(t)
 	defer cleanup()
 	h.Register(sess)
 	clientID, _ := sess.Get("client_id")
 	client := h.GetClient(clientID.(string))
+	inbox := collectWSEvents(conn)
 
 	joinRoom(t, h, client, roomID, "carol")
+	_ = waitCollectedEvent(t, inbox, "room_joined", 2*time.Second, nil)
 
 	// 100ms window @ 240 px/s → max ~24px; teleport far away must clamp
 	client.LastPresenceAt = time.Now().Add(-100 * time.Millisecond)
@@ -245,5 +247,56 @@ func TestPresenceUpdateTeleportCorrected(t *testing.T) {
 	}
 	if p.X == office.SpawnX+500 {
 		t.Fatal("teleport accepted without correction")
+	}
+
+	corrected := waitCollectedEvent(t, inbox, "presence_corrected", 2*time.Second, nil)
+	if _, ok := corrected["x"].(float64); !ok {
+		t.Fatalf("presence_corrected missing x: %+v", corrected)
+	}
+	if _, ok := corrected["y"].(float64); !ok {
+		t.Fatalf("presence_corrected missing y: %+v", corrected)
+	}
+	if corrected["dir"] != "right" {
+		t.Fatalf("presence_corrected dir = %v, want right", corrected["dir"])
+	}
+	if _, ok := corrected["zone_id"].(string); !ok {
+		t.Fatalf("presence_corrected missing zone_id: %+v", corrected)
+	}
+}
+
+func TestPresenceLeaveOnDisconnect(t *testing.T) {
+	const roomID = "100005"
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+
+	sessA, _, cleanupA := dialTestSession(t)
+	defer cleanupA()
+	h.Register(sessA)
+	idA, _ := sessA.Get("client_id")
+	alice := h.GetClient(idA.(string))
+	joinRoom(t, h, alice, roomID, "alice")
+
+	_, inboxB, cleanupB := registerJoined(t, h, roomID, "bob")
+	defer cleanupB()
+
+	aliceID := alice.ID
+	aliceUID := alice.User.ID
+	h.Unregister(sessA)
+
+	leave := waitCollectedEvent(t, inboxB, "presence_leave", 2*time.Second, func(p map[string]interface{}) bool {
+		return p["connection_id"] == aliceID
+	})
+	if leave["user_id"] != aliceUID {
+		t.Fatalf("presence_leave user_id = %v, want %q", leave["user_id"], aliceUID)
+	}
+	got, err := fs.GetAllPresence(context.Background(), roomID)
+	if err != nil {
+		t.Fatalf("GetAllPresence: %v", err)
+	}
+	for _, p := range got {
+		if p.ConnectionID == aliceID {
+			t.Fatal("alice presence should be deleted on disconnect")
+		}
 	}
 }

@@ -121,7 +121,7 @@ func HandleBubbleInvite(h *hub.Hub, client *hub.Client, rawPayload json.RawMessa
 		client.BubbleID = b.ID
 		persistBubblePresence(h, client)
 		broadcastBubble(h, roomID, b)
-		SyncActiveVoice(h, client)
+		syncVoiceForBubbleMembers(h, roomID, b)
 	}
 
 	h.SendToClient(target.ID, "bubble_invite", bubbleInviteEventPayload{
@@ -131,6 +131,25 @@ func HandleBubbleInvite(h *hub.Hub, client *hub.Client, rawPayload json.RawMessa
 		FromUsername:     client.User.Username,
 	})
 	log.Info().Str("event", "bubble_invite").Str("bubble_id", b.ID).Str("from", client.ID).Str("to", toID).Msg("bubble invite sent")
+}
+
+// syncVoiceForBubbleMembers remints LiveKit creds for every online member so
+// bubble voice stays consistent after create/accept (incl. prior mint failures).
+func syncVoiceForBubbleMembers(h *hub.Hub, roomID string, b *model.Bubble) {
+	if h == nil || b == nil {
+		return
+	}
+	for _, id := range b.Members {
+		c := h.GetClient(id)
+		if c == nil || c.RoomID != roomID {
+			continue
+		}
+		// Force recompute even if a previous mint left ActiveVoiceGroup empty/stale.
+		if c.ActiveVoiceGroup == "" || !strings.Contains(c.ActiveVoiceGroup, ":bubble:"+b.ID) {
+			c.ActiveVoiceGroup = joinVoiceSyncSentinel
+		}
+		SyncActiveVoice(h, c)
+	}
 }
 
 // HandleBubbleAccept จัดการ Event bubble_accept — ต้องมี invite ค้างอยู่
@@ -194,7 +213,7 @@ func HandleBubbleAccept(h *hub.Hub, client *hub.Client, rawPayload json.RawMessa
 	client.BubbleID = bubbleID
 	persistBubblePresence(h, client)
 	broadcastBubble(h, roomID, b)
-	SyncActiveVoice(h, client)
+	syncVoiceForBubbleMembers(h, roomID, b)
 	log.Info().Str("event", "bubble_accept").Str("bubble_id", bubbleID).Str("connection_id", client.ID).Msg("bubble accepted")
 }
 
