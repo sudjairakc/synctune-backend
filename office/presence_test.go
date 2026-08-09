@@ -64,15 +64,64 @@ func TestAcceptPresence_WallReverts(t *testing.T) {
 }
 
 func TestAcceptPresence_PrivateDenyReverts(t *testing.T) {
-	t.Skip("map v2 has no private zones; private entry path deferred to Task 3")
+	m := office.SyntheticPrivateMap()
+	ts := float64(office.TileSize)
+	prevX, prevY := 1*ts+ts/2, 1*ts+ts/2
+	privX, privY := 2*ts+ts/2, 2*ts+ts/2
+	in := presenceInput(prevX, prevY, privX, privY, 500*time.Millisecond, 240)
+	in.CanEnterPrivate = func(string) bool { return false }
+	got := office.AcceptPresence(m, in)
+
+	if !got.Rejected {
+		t.Fatal("private deny should Rejected=true")
+	}
+	if got.X != prevX || got.Y != prevY {
+		t.Fatalf("should revert to prev, got (%v,%v)", got.X, got.Y)
+	}
 }
 
 func TestAcceptPresence_PrivateNilCallbackDenies(t *testing.T) {
-	t.Skip("map v2 has no private zones; private entry path deferred to Task 3")
+	m := office.SyntheticPrivateMap()
+	ts := float64(office.TileSize)
+	prevX, prevY := 1*ts+ts/2, 1*ts+ts/2
+	privX, privY := 2*ts+ts/2, 2*ts+ts/2
+	in := presenceInput(prevX, prevY, privX, privY, 500*time.Millisecond, 240)
+	in.CanEnterPrivate = nil
+	got := office.AcceptPresence(m, in)
+
+	if !got.Rejected {
+		t.Fatal("nil CanEnterPrivate should deny private")
+	}
+	if got.X != prevX || got.Y != prevY {
+		t.Fatalf("should revert to prev, got (%v,%v)", got.X, got.Y)
+	}
 }
 
 func TestAcceptPresence_PrivateAllowHappy(t *testing.T) {
-	t.Skip("map v2 has no private zones; private entry path deferred to Task 3")
+	m := office.SyntheticPrivateMap()
+	ts := float64(office.TileSize)
+	prevX, prevY := 1*ts+ts/2, 1*ts+ts/2
+	privX, privY := 2*ts+ts/2, 2*ts+ts/2
+	in := presenceInput(prevX, prevY, privX, privY, 500*time.Millisecond, 240)
+	in.CanEnterPrivate = func(zoneID string) bool { return zoneID == "private-a" }
+	got := office.AcceptPresence(m, in)
+
+	if got.Rejected {
+		t.Fatal("allowed private entry should not be rejected")
+	}
+	if got.ZoneID != "private-a" || got.ZoneType != office.ZonePrivate {
+		t.Fatalf("want private-a/private, got %q %s", got.ZoneID, got.ZoneType)
+	}
+	if got.X != privX || got.Y != privY {
+		t.Fatalf("pos = (%v,%v)", got.X, got.Y)
+	}
+}
+
+func TestDefaultMap_NoPrivateZones(t *testing.T) {
+	m := office.DefaultMap()
+	if m.IsPrivateZone("private-a") || m.IsPrivateZone("private-b") {
+		t.Fatal("DefaultMap v2 must not expose private zones")
+	}
 }
 
 func TestAcceptPresence_OOBClampedThenWallRevert(t *testing.T) {

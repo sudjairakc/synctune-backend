@@ -67,6 +67,7 @@ type roomJoinedPayload struct {
 	PlaybackSpeed       float64                   `json:"playback_speed"`
 	AllowSkipBroadcast  bool                      `json:"allow_skip_broadcast"`
 	Presence            []model.Presence          `json:"presence_state"`
+	ChannelHistories    map[string][]model.ChatMessage `json:"channel_histories,omitempty"`
 }
 
 // playbackModePayload คือ Payload ของ event playback_mode_updated
@@ -118,13 +119,16 @@ func BroadcastSongSkipped(h hubInterface, roomID string, song model.Song, errorC
 }
 
 // SendRoomJoined ส่ง event "room_joined" ไปยัง Client ที่เพิ่ง join (ไม่ Broadcast)
-func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot, soundPadHistory []model.SoundPadPlayEvent, presence []model.Presence, allowSkipBroadcast bool) {
+func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot, soundPadHistory []model.SoundPadPlayEvent, presence []model.Presence, allowSkipBroadcast bool, channelHistories map[string][]model.ChatMessage) {
 	speed := state.PlaybackSpeed
 	if speed == 0 {
 		speed = 1
 	}
 	if presence == nil {
 		presence = []model.Presence{}
+	}
+	if channelHistories == nil {
+		channelHistories = map[string][]model.ChatMessage{}
 	}
 	h.SendToSession(session, "room_joined", roomJoinedPayload{
 		RoomID:             roomID,
@@ -143,6 +147,7 @@ func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, stat
 		PlaybackSpeed:      speed,
 		AllowSkipBroadcast: allowSkipBroadcast,
 		Presence:           presence,
+		ChannelHistories:   channelHistories,
 	})
 }
 

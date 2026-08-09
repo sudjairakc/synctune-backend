@@ -17,24 +17,23 @@ func TestMapV2_WalkContract(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		tx, ty   int
 		kind     office.TileKind
 		walkable bool
 	}{
-		{"floor", 1, 1, office.TileFloor, true},
-		{"wall", 0, 0, office.TileWall, false},
-		{"desk", 4, 2, office.TileDesk, false},
-		{"chair", 3, 3, office.TileChair, true},
-		{"door", 10, 0, office.TileDoor, true},
+		{"floor", office.TileFloor, true},
+		{"wall", office.TileWall, false},
+		{"desk", office.TileDesk, false},
+		{"chair", office.TileChair, true},
+		{"door", office.TileDoor, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			x, y := tileCenter(tc.tx, tc.ty)
+			x, y := office.MustFindTile(m, tc.kind)
 			if got := m.TileAt(x, y); got != tc.kind {
-				t.Fatalf("TileAt(%d,%d) = %q, want %q", tc.tx, tc.ty, got, tc.kind)
+				t.Fatalf("TileAt first %s = %q, want %q", tc.kind, got, tc.kind)
 			}
 			if got := m.IsWalkable(x, y); got != tc.walkable {
-				t.Fatalf("IsWalkable(%d,%d) = %v, want %v", tc.tx, tc.ty, got, tc.walkable)
+				t.Fatalf("IsWalkable first %s = %v, want %v", tc.kind, got, tc.walkable)
 			}
 		})
 	}
@@ -57,22 +56,11 @@ func TestMapV2_SpawnOpenFloor(t *testing.T) {
 
 func TestMapV2_MeetingZones(t *testing.T) {
 	m := office.DefaultMap()
-	// Centers of meeting bounds from map_v2.json (tile-aligned).
-	cases := []struct {
-		id     string
-		tx, ty int
-		tw, th int
-	}{
-		{"meeting-a", 1, 1, 8, 7},
-		{"meeting-b", 12, 1, 7, 7},
-	}
-	ts := float64(office.TileSize)
-	for _, tc := range cases {
-		x := (float64(tc.tx) + float64(tc.tw)/2) * ts
-		y := (float64(tc.ty) + float64(tc.th)/2) * ts
-		id, zt := m.ZoneAt(x, y)
-		if zt != office.ZoneMeeting || id != tc.id {
-			t.Fatalf("center of %s: got %q %s, want %q meeting", tc.id, id, zt, tc.id)
+	for _, id := range []string{"meeting-a", "meeting-b"} {
+		x, y := office.MeetingCenter(m, id)
+		gotID, zt := m.ZoneAt(x, y)
+		if zt != office.ZoneMeeting || gotID != id {
+			t.Fatalf("MeetingCenter(%s): ZoneAt=%q %s, want %q meeting", id, gotID, zt, id)
 		}
 	}
 }

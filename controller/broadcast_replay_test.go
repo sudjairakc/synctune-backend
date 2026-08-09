@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -139,6 +140,9 @@ func (f *fakeStore) GetPinnedMessages(_ context.Context, _ string) ([]model.Chat
 }
 
 func (f *fakeStore) SetPresence(_ context.Context, roomID string, p model.Presence) error {
+	if strings.TrimSpace(p.ConnectionID) == "" {
+		return fmt.Errorf("SetPresence: empty connection_id")
+	}
 	if f.presence[roomID] == nil {
 		f.presence[roomID] = map[string]model.Presence{}
 	}
@@ -185,6 +189,35 @@ func (f *fakeStore) SetPrivateZoneState(_ context.Context, roomID, zoneID string
 		Invites:   append([]string(nil), state.Invites...),
 	}
 	return nil
+}
+
+func (f *fakeStore) UpdatePrivateZoneState(ctx context.Context, roomID, zoneID string, mutate func(st *model.PrivateZoneState) (deleteKey bool, err error)) error {
+	st, err := f.GetPrivateZoneState(ctx, roomID, zoneID)
+	if err != nil {
+		return err
+	}
+	deleteKey, err := mutate(st)
+	if err != nil {
+		return err
+	}
+	if deleteKey {
+		return f.DeletePrivateZoneState(ctx, roomID, zoneID)
+	}
+	return f.SetPrivateZoneState(ctx, roomID, zoneID, st)
+}
+
+func (f *fakeStore) ListChannelKeys(_ context.Context, roomID, channelPrefix string) ([]string, error) {
+	var out []string
+	for key := range f.channelMsg {
+		parts := strings.SplitN(key, "\x00", 2)
+		if len(parts) != 2 || parts[0] != roomID {
+			continue
+		}
+		if strings.HasPrefix(parts[1], channelPrefix) {
+			out = append(out, parts[1])
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeStore) DeletePrivateZoneState(_ context.Context, roomID, zoneID string) error {

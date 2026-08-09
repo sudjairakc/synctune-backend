@@ -142,7 +142,8 @@ func HandleJoin(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 
 	log.Info().Str("event", "join").Str("user_id", user.ID).Str("username", user.Username).Str("room_id", roomID).Msg("user joined room")
 
-	broadcaster.SendRoomJoined(h, client.Conn, roomID, state, history, chatHistory, h.OnlineUsersInRoom(roomID), soundPad, soundPadHistory, presenceState, settings.AllowSkipBroadcast)
+	channelHistories := loadJoinChannelHistories(h, client, spawned)
+	broadcaster.SendRoomJoined(h, client.Conn, roomID, state, history, chatHistory, h.OnlineUsersInRoom(roomID), soundPad, soundPadHistory, presenceState, settings.AllowSkipBroadcast, channelHistories)
 	// Peers need an immediate presence_update; joiner already has presence_state in room_joined
 	broadcaster.BroadcastPresenceUpdate(h, roomID, spawned)
 	broadcaster.BroadcastUserJoined(h, roomID, user, h.OnlineUsersInRoom(roomID))

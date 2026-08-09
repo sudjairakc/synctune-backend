@@ -7,18 +7,15 @@ import (
 	"time"
 
 	"github.com/synctune/backend/hub"
+	"github.com/synctune/backend/office"
 )
 
-const (
-	meetingZoneID = "meeting-a"
-	meetingX      = 1088.0 // inside meeting-a rect
-	meetingY      = 256.0
-)
-
-func placeInMeeting(c *hub.Client) {
-	c.LastX = meetingX
-	c.LastY = meetingY
-	c.LastZoneID = meetingZoneID
+func placeInMeeting(c *hub.Client, zoneID string) {
+	m := office.DefaultMap()
+	x, y := office.MeetingCenter(m, zoneID)
+	c.LastX = x
+	c.LastY = y
+	c.LastZoneID = zoneID
 }
 
 func assertNoEvent(t *testing.T, ch <-chan map[string]interface{}, event string, wait time.Duration) {
@@ -72,7 +69,7 @@ func TestMeetingSendRejectOutsideZone(t *testing.T) {
 	if errPayload["code"] != "NOT_IN_MEETING" {
 		t.Fatalf("error code = %v, want NOT_IN_MEETING", errPayload["code"])
 	}
-	got, _ := fs.GetChannelHistory(context.Background(), roomID, "meeting:"+meetingZoneID, 10)
+	got, _ := fs.GetChannelHistory(context.Background(), roomID, "meeting:meeting-a", 10)
 	if len(got) != 0 {
 		t.Fatalf("should not persist meeting message outside zone, got %d", len(got))
 	}
@@ -91,8 +88,8 @@ func TestMeetingSendBroadcastsOnlyInZone(t *testing.T) {
 	_, inboxC, cleanupC := registerJoined(t, h, roomID, "carol")
 	defer cleanupC()
 
-	placeInMeeting(alice)
-	placeInMeeting(bob)
+	placeInMeeting(alice, "meeting-a")
+	placeInMeeting(bob, "meeting-a")
 	// carol stays at spawn (open)
 
 	payload, _ := json.Marshal(meetingSendPayload{Text: "stand-up notes"})
@@ -102,20 +99,52 @@ func TestMeetingSendBroadcastsOnlyInZone(t *testing.T) {
 	msgB := waitCollectedEvent(t, inboxB, "meeting_message", 2*time.Second, nil)
 	assertNoEvent(t, inboxC, "meeting_message", 200*time.Millisecond)
 
-	if msgA["channel"] != "meeting:"+meetingZoneID {
-		t.Fatalf("alice channel = %v, want meeting:%s", msgA["channel"], meetingZoneID)
+	if msgA["channel"] != "meeting:meeting-a" {
+		t.Fatalf("alice channel = %v, want meeting:meeting-a", msgA["channel"])
 	}
-	if msgB["channel"] != "meeting:"+meetingZoneID {
-		t.Fatalf("bob channel = %v, want meeting:%s", msgB["channel"], meetingZoneID)
+	if msgB["channel"] != "meeting:meeting-a" {
+		t.Fatalf("bob channel = %v, want meeting:meeting-a", msgB["channel"])
 	}
 	text, _ := msgA["text"].(string)
 	if text != "stand-up notes" {
 		t.Fatalf("text = %q, want stand-up notes", text)
 	}
 
-	hist, _ := fs.GetChannelHistory(context.Background(), roomID, "meeting:"+meetingZoneID, 10)
+	hist, _ := fs.GetChannelHistory(context.Background(), roomID, "meeting:meeting-a", 10)
 	if len(hist) != 1 {
 		t.Fatalf("channel history len = %d, want 1", len(hist))
+	}
+}
+
+func TestMeetingSendBroadcastsMeetingB(t *testing.T) {
+	const roomID = "200007"
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+
+	alice, inboxA, cleanupA := registerJoined(t, h, roomID, "alice")
+	defer cleanupA()
+	bob, inboxB, cleanupB := registerJoined(t, h, roomID, "bob")
+	defer cleanupB()
+	_, inboxC, cleanupC := registerJoined(t, h, roomID, "carol")
+	defer cleanupC()
+
+	placeInMeeting(alice, "meeting-b")
+	placeInMeeting(bob, "meeting-b")
+
+	payload, _ := json.Marshal(meetingSendPayload{Text: "room-b notes"})
+	HandleMeetingSend(h, alice, payload)
+
+	msgA := waitCollectedEvent(t, inboxA, "meeting_message", 2*time.Second, nil)
+	msgB := waitCollectedEvent(t, inboxB, "meeting_message", 2*time.Second, nil)
+	assertNoEvent(t, inboxC, "meeting_message", 200*time.Millisecond)
+
+	if msgA["channel"] != "meeting:meeting-b" || msgB["channel"] != "meeting:meeting-b" {
+		t.Fatalf("channels a=%v b=%v, want meeting:meeting-b", msgA["channel"], msgB["channel"])
+	}
+	hist, _ := fs.GetChannelHistory(context.Background(), roomID, "meeting:meeting-b", 10)
+	if len(hist) != 1 {
+		t.Fatalf("meeting-b history len = %d, want 1", len(hist))
 	}
 }
 

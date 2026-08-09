@@ -4,6 +4,7 @@ package controller
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/livekit/protocol/auth"
@@ -79,8 +80,17 @@ func EmitVoiceCredentials(h *hub.Hub, client *hub.Client, cfg *config.Config, gr
 	creds, err := BuildVoiceCredentials(cfg, groupID, client.ID)
 	if err != nil {
 		log.Warn().Err(err).Str("connection_id", client.ID).Str("group_id", groupID).
-			Msg("EmitVoiceCredentials: mint failed; clearing voice")
-		h.SendToSession(client.Conn, "voice_credentials", VoiceCredentials{})
+			Msg("EmitVoiceCredentials: mint failed; signaling unavailable")
+		// Keep group_id so clients can show "voice unavailable" + retry; leave
+		// ActiveVoiceGroup empty (return "") so a later sync can remint.
+		h.SendToSession(client.Conn, "voice_credentials", VoiceCredentials{GroupID: groupID})
+		return ""
+	}
+	// Empty URL with a group means misconfigured deploy — same unavailable UX.
+	if groupID != "" && strings.TrimSpace(creds.URL) == "" {
+		log.Warn().Str("connection_id", client.ID).Str("group_id", groupID).
+			Msg("EmitVoiceCredentials: empty LIVEKIT_URL; signaling unavailable")
+		h.SendToSession(client.Conn, "voice_credentials", VoiceCredentials{GroupID: groupID})
 		return ""
 	}
 	h.SendToSession(client.Conn, "voice_credentials", creds)

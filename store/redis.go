@@ -122,10 +122,15 @@ type Store interface {
 	GetPrivateZoneState(ctx context.Context, roomID, zoneID string) (*model.PrivateZoneState, error)
 	// SetPrivateZoneState บันทึก occupants/invites ของ private zone
 	SetPrivateZoneState(ctx context.Context, roomID, zoneID string, state *model.PrivateZoneState) error
+	// UpdatePrivateZoneState อ่าน→แก้→เขียนแบบ atomic (WATCH/MULTI) กัน Get→Set race
+	// ถ้า mutate คืน deleteKey=true จะลบ key
+	UpdatePrivateZoneState(ctx context.Context, roomID, zoneID string, mutate func(st *model.PrivateZoneState) (deleteKey bool, err error)) error
 	// DeletePrivateZoneState ลบ key ของ private zone
 	DeletePrivateZoneState(ctx context.Context, roomID, zoneID string) error
 	// RemoveConnectionFromPrivateZones ลบ connection ออกจากทุก private zone ของห้อง (disconnect)
 	RemoveConnectionFromPrivateZones(ctx context.Context, roomID, connectionID string) error
+	// ListChannelKeys คืน channel names ที่ขึ้นต้นด้วย prefix (เช่น "dm:", "meeting:") ในห้อง
+	ListChannelKeys(ctx context.Context, roomID, channelPrefix string) ([]string, error)
 	// GetBubble โหลด Bubble ตาม id — คืน nil,nil ถ้าไม่มี
 	GetBubble(ctx context.Context, roomID, bubbleID string) (*model.Bubble, error)
 	// SetBubble บันทึก Bubble ใน HASH synctune:room:{id}:bubbles
@@ -575,6 +580,9 @@ func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 
 // SetPresence บันทึก Presence เป็น JSON ใน HASH field = connection_id
 func (s *RedisStore) SetPresence(ctx context.Context, roomID string, p model.Presence) error {
+	if strings.TrimSpace(p.ConnectionID) == "" {
+		return fmt.Errorf("SetPresence: empty connection_id")
+	}
 	data, err := json.Marshal(p)
 	if err != nil {
 		return fmt.Errorf("SetPresence: marshal: %w", err)
@@ -713,6 +721,94 @@ func (s *RedisStore) SetPrivateZoneState(ctx context.Context, roomID, zoneID str
 	return nil
 }
 
+const privateZoneUpdateRetries = 8
+
+// UpdatePrivateZoneState อัปเดต private zone แบบ optimistic lock (WATCH + MULTI)
+func (s *RedisStore) UpdatePrivateZoneState(ctx context.Context, roomID, zoneID string, mutate func(st *model.PrivateZoneState) (deleteKey bool, err error)) error {
+	if mutate == nil {
+		return fmt.Errorf("UpdatePrivateZoneState: mutate is nil")
+	}
+	key := roomPrivateZoneKey(roomID, zoneID)
+	for attempt := 0; attempt < privateZoneUpdateRetries; attempt++ {
+		err := s.client.Watch(ctx, func(tx *redis.Tx) error {
+			st := &model.PrivateZoneState{}
+			data, err := tx.Get(ctx, key).Bytes()
+			if err == redis.Nil {
+				// empty
+			} else if err != nil {
+				return fmt.Errorf("UpdatePrivateZoneState: get: %w", err)
+			} else if err := json.Unmarshal(data, st); err != nil {
+				return fmt.Errorf("UpdatePrivateZoneState: unmarshal: %w", err)
+			}
+			if st.Occupants == nil {
+				st.Occupants = []string{}
+			}
+			if st.Invites == nil {
+				st.Invites = []string{}
+			}
+			deleteKey, err := mutate(st)
+			if err != nil {
+				return err
+			}
+			_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				if deleteKey {
+					pipe.Del(ctx, key)
+					return nil
+				}
+				if st.Occupants == nil {
+					st.Occupants = []string{}
+				}
+				if st.Invites == nil {
+					st.Invites = []string{}
+				}
+				payload, mErr := json.Marshal(st)
+				if mErr != nil {
+					return mErr
+				}
+				pipe.Set(ctx, key, payload, 0)
+				return nil
+			})
+			return err
+		}, key)
+		if err == redis.TxFailedErr {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	return fmt.Errorf("UpdatePrivateZoneState: exhausted retries for %s/%s", roomID, zoneID)
+}
+
+// ListChannelKeys สแกน channel chat keys ในห้องที่ขึ้นต้นด้วย channelPrefix
+func (s *RedisStore) ListChannelKeys(ctx context.Context, roomID, channelPrefix string) ([]string, error) {
+	pattern := roomChannelChatKey(roomID, channelPrefix) + "*"
+	prefix := "synctune:room:" + roomID + ":chat:"
+	var (
+		cursor uint64
+		out    []string
+	)
+	for {
+		batch, next, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return nil, fmt.Errorf("ListChannelKeys: scan: %w", err)
+		}
+		for _, key := range batch {
+			ch := strings.TrimPrefix(key, prefix)
+			if ch == "" || ch == key {
+				continue
+			}
+			out = append(out, ch)
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return out, nil
+}
+
 // DeletePrivateZoneState ลบ key ของ private zone
 func (s *RedisStore) DeletePrivateZoneState(ctx context.Context, roomID, zoneID string) error {
 	if err := s.client.Del(ctx, roomPrivateZoneKey(roomID, zoneID)).Err(); err != nil {
@@ -737,19 +833,11 @@ func (s *RedisStore) RemoveConnectionFromPrivateZones(ctx context.Context, roomI
 			if zoneID == "" || zoneID == key {
 				continue
 			}
-			st, err := s.GetPrivateZoneState(ctx, roomID, zoneID)
-			if err != nil {
-				return err
-			}
-			st.Occupants = filterOutID(st.Occupants, connectionID)
-			st.Invites = filterOutID(st.Invites, connectionID)
-			if len(st.Occupants) == 0 {
-				if err := s.DeletePrivateZoneState(ctx, roomID, zoneID); err != nil {
-					return err
-				}
-				continue
-			}
-			if err := s.SetPrivateZoneState(ctx, roomID, zoneID, st); err != nil {
+			if err := s.UpdatePrivateZoneState(ctx, roomID, zoneID, func(st *model.PrivateZoneState) (bool, error) {
+				st.Occupants = filterOutID(st.Occupants, connectionID)
+				st.Invites = filterOutID(st.Invites, connectionID)
+				return len(st.Occupants) == 0, nil
+			}); err != nil {
 				return err
 			}
 		}

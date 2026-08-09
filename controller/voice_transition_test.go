@@ -60,11 +60,12 @@ func TestVoiceTransitions_Table(t *testing.T) {
 		{
 			name: "open→meeting",
 			apply: func(t *testing.T, h *hub.Hub, client *hub.Client, _ *hub.Client) {
-				// Place adjacent to meeting-a, then walk in (speed-legal).
-				client.LastX, client.LastY = 900, 256
+				m := office.DefaultMap()
+				outX, outY, inX, inY := office.MeetingEntryPath(m, "meeting-a")
+				client.LastX, client.LastY = outX, outY
 				client.LastZoneID = ""
 				client.LastPresenceAt = time.Now().Add(-time.Second)
-				payload, _ := json.Marshal(presenceUpdatePayload{X: 980, Y: 256, Dir: "right"})
+				payload, _ := json.Marshal(presenceUpdatePayload{X: inX, Y: inY, Dir: "up"})
 				HandlePresenceUpdate(h, client, payload)
 			},
 			wantGroup: "st:160001:meet:meeting-a",
@@ -180,6 +181,9 @@ func TestVoiceTransitions_Table(t *testing.T) {
 func TestSyncActiveVoice_UsesDeriveActiveVoiceGroup(t *testing.T) {
 	withLiveKitEnv(t)
 
+	m := office.DefaultMap()
+	ax, ay := office.MeetingCenter(m, "meeting-a")
+	bx, by := office.MeetingCenter(m, "meeting-b")
 	cases := []struct {
 		name     string
 		bubbleID string
@@ -187,8 +191,9 @@ func TestSyncActiveVoice_UsesDeriveActiveVoiceGroup(t *testing.T) {
 		want     string
 	}{
 		{"open silent", "", office.SpawnX, office.SpawnY, ""},
-		{"meeting", "", 1088, 256, "st:160002:meet:meeting-a"},
-		{"bubble wins", "bub-1", 1088, 256, "st:160002:bubble:bub-1"},
+		{"meeting", "", ax, ay, "st:160002:meet:meeting-a"},
+		{"meeting-b", "", bx, by, "st:160002:meet:meeting-b"},
+		{"bubble wins", "bub-1", ax, ay, "st:160002:bubble:bub-1"},
 	}
 
 	for _, tc := range cases {
@@ -251,11 +256,16 @@ func TestSyncActiveVoice_MintFailThenRetryWhenConfigured(t *testing.T) {
 	// Drain join force-sync clear (open spawn)
 	_ = waitVoiceCredentials(t, inbox, "", 2*time.Second)
 
-	client.LastX, client.LastY = 1088, 256
+	ax, ay := office.MeetingCenter(office.DefaultMap(), "meeting-a")
+	client.LastX, client.LastY = ax, ay
 	client.LastZoneID = "meeting-a"
 
 	SyncActiveVoice(h, client)
-	_ = waitVoiceCredentials(t, inbox, "", 2*time.Second)
+	// Mint fail keeps group_id in payload (FE "unavailable") but ActiveVoiceGroup stays empty.
+	failPayload := waitVoiceCredentials(t, inbox, wantGroup, 2*time.Second)
+	if token, _ := failPayload["token"].(string); token != "" {
+		t.Fatalf("mint fail should emit empty token, got %q", token)
+	}
 	if client.ActiveVoiceGroup != "" {
 		t.Fatalf("after mint fail ActiveVoiceGroup = %q, want empty (so retry can remint)", client.ActiveVoiceGroup)
 	}
@@ -317,7 +327,8 @@ func TestSyncActiveVoiceOnJoin_MeetingZoneAfterPresence(t *testing.T) {
 
 	h.SetClientRoom(client.ID, roomID)
 	h.SetClientUser(client.ID, model.User{ID: client.ID, Username: "erin"})
-	if _, err := placePresence(h, client, roomID, 1088, 256, "down"); err != nil {
+	ax, ay := office.MeetingCenter(office.DefaultMap(), "meeting-a")
+	if _, err := placePresence(h, client, roomID, ax, ay, "down"); err != nil {
 		t.Fatalf("placePresence: %v", err)
 	}
 
