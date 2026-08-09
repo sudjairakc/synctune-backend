@@ -5,18 +5,13 @@ import "math"
 // TileSize is the pixel size of one map tile (matches map_v2.json).
 const TileSize = 32
 
-// MapTilesW / MapTilesH are the v2 grid dimensions (set from DefaultMap in init).
-var MapTilesW = 20
-var MapTilesH = 23
-
 // SpawnX / SpawnY are the world-pixel spawn point (center of the spawn tile).
+// Derived from DefaultMap — do not hardcode map dimensions here.
 var SpawnX, SpawnY float64
 
 func init() {
 	m := loadMapV2()
 	defaultMap = m
-	MapTilesW = m.tilesW
-	MapTilesH = m.tilesH
 	SpawnX, SpawnY = m.SpawnWorld()
 }
 
