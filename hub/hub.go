@@ -81,8 +81,11 @@ func (h *Hub) Store() store.Store {
 	return h.store
 }
 
-// GetClient คืน Client ตาม ID หรือ nil ถ้าไม่พบ
+// GetClient คืน Client ตาม ID หรือ nil ถ้าไม่พบ (empty connection_id → nil)
 func (h *Hub) GetClient(clientID string) *Client {
+	if clientID == "" {
+		return nil
+	}
 	h.mu.RLock()
 	defer h.mu.RUnlock()
 	return h.clients[clientID]

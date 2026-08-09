@@ -53,6 +53,18 @@ gofmt -w .                         # Format
 | `RATE_LIMIT_ADD_SONG` | `10` | Max add_song events per minute per client |
 | `LOG_LEVEL` | `info` | Log level: debug / info / warn / error |
 | `ALLOWED_ORIGINS` | `*` | CORS allowed origins (comma-separated) |
+| `PRESENCE_MAX_SPEED_PX_PER_SEC` | `240` | Max accepted avatar speed (world px/s) |
+| `PRESENCE_MIN_INTERVAL_MS` | `66` | Min interval between presence updates (~15 Hz) |
+| `BELL_COOLDOWN_MS` | `5000` | Cooldown between `bell_ring` per pair |
+| `FOLLOW_STOP_DISTANCE_PX` | `48` | Follow stop distance (documented; client steering) |
+| `LIVEKIT_URL` | _(empty)_ | LiveKit WebSocket URL for `voice_credentials` |
+| `LIVEKIT_API_KEY` | _(empty)_ | LiveKit API key (token mint) |
+| `LIVEKIT_API_SECRET` | _(empty)_ | LiveKit API secret (token mint) |
+
+> Office voice needs `LIVEKIT_URL` + `LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET`. Without them the hub still runs; meeting/bubble voice credentials stay empty.
+
+**Manual soak (Phase 5):** see monorepo checklist  
+`docs/superpowers/plans/MANUAL_SOAK-office-layer.md` (outside this git repo).
 
 ---
 
@@ -131,14 +143,26 @@ synctune-backend/
 | `soundpad_play` | `{ slot }` | Trigger a slot — broadcast to all clients |
 | `soundpad_stop` | — | Stop SoundPad audio — broadcast to all clients |
 | `vote_cast` | `{ vote_id }` | Cast a yes vote for the active vote |
-| `voice_start` | — | Start PTT (WebRTC signaling) |
-| `voice_stop` | — | Stop PTT |
+| `voice_start` | — | Start PTT (WebRTC signaling) — legacy mesh |
+| `voice_stop` | — | Stop PTT — legacy mesh |
 | `voice_join` | `{ to: client_id }` | Listener signals readiness to speaker |
 | `voice_offer` | `{ to, sdp }` | Speaker sends SDP offer to listener |
 | `voice_answer` | `{ to, sdp }` | Listener sends SDP answer to speaker |
 | `voice_ice` | `{ to, candidate }` | ICE candidate exchange |
+| `presence_update` | `{ x, y, dir }` | Client-authoritative move (server sanity + zone derive) |
+| `meeting_send` | `{ text }` | Chat to current meeting zone |
+| `dm_send` | `{ to_connection_id, text }` | Room-scoped DM to a connection |
+| `bubble_send` | `{ bubble_id, text }` | Chat inside bubble |
+| `bubble_invite` | `{ to_connection_id }` | Invite peer into ownerless bubble |
+| `bubble_accept` | `{ bubble_id }` | Accept bubble invite |
+| `bubble_leave` | — | Leave current bubble (teardown at 0 members) |
+| `private_invite` | `{ zone_id, to_connection_id }` | Occupant invites peer into private zone |
+| `follow_start` | `{ target_connection_id }` | Start following a connection |
+| `follow_stop` | — | Clear follow |
+| `bell_ring` | `{ target_connection_id }` | Ring peer (cooldown enforced) |
 
-> `song_id` in all events refers to `queue_id` (UUID), not the YouTube video ID.
+> `song_id` in all events refers to `queue_id` (UUID), not the YouTube video ID.  
+> Presence identity key is always `connection_id` (not `user_id`). Empty `*_connection_id` targets are rejected.
 
 ### Server → Client
 
@@ -158,12 +182,23 @@ synctune-backend/
 | `vote_started` | Vote object | Broadcast when a new vote opens |
 | `vote_updated` | Vote object | Broadcast when a yes vote is added |
 | `vote_resolved` | `{ vote, result }` | Broadcast when a vote concludes |
-| `voice_start` | `{ user_id, username, profile_img }` | Broadcast when PTT starts |
-| `voice_stop` | `{ user_id }` | Broadcast when PTT stops |
+| `voice_start` | `{ user_id, username, profile_img }` | Broadcast when PTT starts (legacy) |
+| `voice_stop` | `{ user_id }` | Broadcast when PTT stops (legacy) |
 | `voice_join` | `{ from }` | Relay: listener → speaker |
 | `voice_offer` | `{ from, sdp }` | Relay: speaker → listener |
 | `voice_answer` | `{ from, sdp }` | Relay: listener → speaker |
 | `voice_ice` | `{ from, candidate }` | Relay: ICE candidate |
+| `presence_state` | `{ presences[] }` | Full presence snapshot (keyed by `connection_id`) |
+| `presence_update` | Presence | One avatar moved / updated |
+| `presence_leave` | `{ connection_id }` | Connection left the map |
+| `presence_corrected` | `{ x, y, dir, zone_id }` | Server rejected move — snap client |
+| `zone_changed` | `{ connection_id, user_id, zone_id }` | Derived zone change |
+| `follow_updated` | `{ connection_id, following_id }` | Follow target changed |
+| `bell_ring` | `{ from_connection_id, from_user_id, from_username }` | Incoming bell (target only) |
+| `private_invite` | `{ zone_id, from_connection_id, ... }` | Private zone invite |
+| `bubble_invite` / `bubble_updated` / `bubble_left` | bubble payloads | Bubble lifecycle |
+| `meeting_message` / `dm_message` / `bubble_message` | channel chat | Office chat channels |
+| `voice_credentials` | `{ url, token, group_id }` or empty clear | LiveKit join/leave for active voice group |
 | `error` | `{ code, message }` | Sent only to the client that caused the error |
 
 #### song_skipped — reason values
