@@ -20,6 +20,7 @@ type fakeStore struct {
 	vote     map[string]*model.Vote
 	claims   map[string]bool // "roomID:queueID" → claimed (จำลอง SET NX)
 	settings model.AppSettings
+	presence map[string]map[string]model.Presence // roomID → connectionID → Presence
 }
 
 func newFakeStore() *fakeStore {
@@ -29,6 +30,7 @@ func newFakeStore() *fakeStore {
 		vote:     map[string]*model.Vote{},
 		claims:   map[string]bool{},
 		settings: model.AppSettings{AllowSkipBroadcast: true}, // default: replay feature เปิด
+		presence: map[string]map[string]model.Presence{},
 	}
 }
 
@@ -82,6 +84,46 @@ func (f *fakeStore) GetVote(_ context.Context, roomID string) (*model.Vote, erro
 
 func (f *fakeStore) DeleteVote(_ context.Context, roomID string) error {
 	delete(f.vote, roomID)
+	return nil
+}
+
+func (f *fakeStore) GetChatHistory(_ context.Context, _ string) ([]model.ChatMessage, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetSoundPad(_ context.Context, _ string) ([]*model.SoundPadSlot, error) {
+	return make([]*model.SoundPadSlot, model.SoundPadSize), nil
+}
+
+func (f *fakeStore) GetSoundPadHistory(_ context.Context, _ string) ([]model.SoundPadPlayEvent, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetPinnedMessages(_ context.Context, _ string) ([]model.ChatMessage, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) SetPresence(_ context.Context, roomID string, p model.Presence) error {
+	if f.presence[roomID] == nil {
+		f.presence[roomID] = map[string]model.Presence{}
+	}
+	f.presence[roomID][p.ConnectionID] = p
+	return nil
+}
+
+func (f *fakeStore) GetAllPresence(_ context.Context, roomID string) ([]model.Presence, error) {
+	m := f.presence[roomID]
+	out := make([]model.Presence, 0, len(m))
+	for _, p := range m {
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (f *fakeStore) DeletePresence(_ context.Context, roomID, connectionID string) error {
+	if m := f.presence[roomID]; m != nil {
+		delete(m, connectionID)
+	}
 	return nil
 }
 

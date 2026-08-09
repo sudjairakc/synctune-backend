@@ -51,21 +51,22 @@ type songSkippedPayload struct {
 
 // roomJoinedPayload คือ Payload ของ event room_joined
 type roomJoinedPayload struct {
-	RoomID       string                `json:"room_id"`
-	CurrentQueue []model.Song          `json:"current_queue"`
-	CurrentIndex int                   `json:"current_index"`
-	SeekTime     int                   `json:"seek_time"`
-	IsPlaying    bool                  `json:"is_playing"`
-	Autoplay     bool                  `json:"autoplay"`
-	Shuffle      bool                  `json:"shuffle"`
-	RandomPlay   bool                  `json:"random_play"`
-	History      []model.HistorySong   `json:"history"`
-	ChatHistory  []model.ChatMessage   `json:"chat_history"`
-	OnlineUsers         []model.User               `json:"online_users"`
-	SoundPad            []*model.SoundPadSlot      `json:"sound_pad"`
-	SoundPadHistory     []model.SoundPadPlayEvent  `json:"soundpad_history"`
-	PlaybackSpeed       float64                    `json:"playback_speed"`
-	AllowSkipBroadcast  bool                       `json:"allow_skip_broadcast"`
+	RoomID              string                    `json:"room_id"`
+	CurrentQueue        []model.Song              `json:"current_queue"`
+	CurrentIndex        int                       `json:"current_index"`
+	SeekTime            int                       `json:"seek_time"`
+	IsPlaying           bool                      `json:"is_playing"`
+	Autoplay            bool                      `json:"autoplay"`
+	Shuffle             bool                      `json:"shuffle"`
+	RandomPlay          bool                      `json:"random_play"`
+	History             []model.HistorySong       `json:"history"`
+	ChatHistory         []model.ChatMessage       `json:"chat_history"`
+	OnlineUsers         []model.User              `json:"online_users"`
+	SoundPad            []*model.SoundPadSlot     `json:"sound_pad"`
+	SoundPadHistory     []model.SoundPadPlayEvent `json:"soundpad_history"`
+	PlaybackSpeed       float64                   `json:"playback_speed"`
+	AllowSkipBroadcast  bool                      `json:"allow_skip_broadcast"`
+	Presence            []model.Presence          `json:"presence_state"`
 }
 
 // playbackModePayload คือ Payload ของ event playback_mode_updated
@@ -117,10 +118,13 @@ func BroadcastSongSkipped(h hubInterface, roomID string, song model.Song, errorC
 }
 
 // SendRoomJoined ส่ง event "room_joined" ไปยัง Client ที่เพิ่ง join (ไม่ Broadcast)
-func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot, soundPadHistory []model.SoundPadPlayEvent, allowSkipBroadcast bool) {
+func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, state *model.PlaylistState, history []model.HistorySong, chatHistory []model.ChatMessage, onlineUsers []model.User, soundPad []*model.SoundPadSlot, soundPadHistory []model.SoundPadPlayEvent, presence []model.Presence, allowSkipBroadcast bool) {
 	speed := state.PlaybackSpeed
 	if speed == 0 {
 		speed = 1
+	}
+	if presence == nil {
+		presence = []model.Presence{}
 	}
 	h.SendToSession(session, "room_joined", roomJoinedPayload{
 		RoomID:             roomID,
@@ -138,6 +142,57 @@ func SendRoomJoined(h hubInterface, session *melody.Session, roomID string, stat
 		SoundPadHistory:    soundPadHistory,
 		PlaybackSpeed:      speed,
 		AllowSkipBroadcast: allowSkipBroadcast,
+		Presence:           presence,
+	})
+}
+
+// presenceLeavePayload คือ payload ของ event presence_leave
+type presenceLeavePayload struct {
+	ConnectionID string `json:"connection_id"`
+	UserID       string `json:"user_id"`
+}
+
+// zoneChangedPayload คือ payload ของ event zone_changed
+type zoneChangedPayload struct {
+	ConnectionID string `json:"connection_id"`
+	UserID       string `json:"user_id"`
+	ZoneID       string `json:"zone_id"`
+}
+
+// presenceCorrectedPayload คือ payload ของ event presence_corrected
+type presenceCorrectedPayload struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Dir    string  `json:"dir"`
+	ZoneID string  `json:"zone_id"`
+}
+
+// BroadcastPresenceUpdate broadcast event "presence_update" ไปทั้งห้อง
+func BroadcastPresenceUpdate(h hubInterface, roomID string, p model.Presence) {
+	h.BroadcastToRoom(roomID, "presence_update", p)
+}
+
+// BroadcastPresenceLeave broadcast event "presence_leave" ไปทั้งห้อง
+func BroadcastPresenceLeave(h hubInterface, roomID, connectionID, userID string) {
+	h.BroadcastToRoom(roomID, "presence_leave", presenceLeavePayload{
+		ConnectionID: connectionID,
+		UserID:       userID,
+	})
+}
+
+// BroadcastZoneChanged broadcast event "zone_changed" ไปทั้งห้อง
+func BroadcastZoneChanged(h hubInterface, roomID, connectionID, userID, zoneID string) {
+	h.BroadcastToRoom(roomID, "zone_changed", zoneChangedPayload{
+		ConnectionID: connectionID,
+		UserID:       userID,
+		ZoneID:       zoneID,
+	})
+}
+
+// SendPresenceCorrected ส่ง event "presence_corrected" ไปยังผู้ส่ง
+func SendPresenceCorrected(h hubInterface, session *melody.Session, x, y float64, dir, zoneID string) {
+	h.SendToSession(session, "presence_corrected", presenceCorrectedPayload{
+		X: x, Y: y, Dir: dir, ZoneID: zoneID,
 	})
 }
 

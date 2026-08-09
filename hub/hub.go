@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/olahol/melody"
@@ -31,6 +32,12 @@ type Client struct {
 	AddSongLimiter     *rate.Limiter
 	ReportErrorLimiter *rate.Limiter
 	ChatLimiter        *rate.Limiter
+	// Presence tracking (in-memory; authoritative copy also in store)
+	LastPresenceAt time.Time
+	LastX          float64
+	LastY          float64
+	LastZoneID     string
+	LastDir        string
 }
 
 // Hub จัดการ Connection Pool และ Broadcast
@@ -69,6 +76,13 @@ func NewHub(s store.Store) *Hub {
 // Store คืน Store ที่ Hub ใช้อยู่
 func (h *Hub) Store() store.Store {
 	return h.store
+}
+
+// GetClient คืน Client ตาม ID หรือ nil ถ้าไม่พบ
+func (h *Hub) GetClient(clientID string) *Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.clients[clientID]
 }
 
 // SetMessageHandler กำหนด Function ที่จะรับ Event จาก Client
@@ -155,6 +169,14 @@ func (h *Hub) Unregister(session *melody.Session) {
 	h.mu.Unlock()
 
 	log.Info().Str("client_id", clientID).Str("username", client.User.Username).Str("room_id", roomID).Msg("client disconnected")
+
+	if roomID != "" && client.User.ID != "" {
+		ctx := context.Background()
+		if err := h.store.DeletePresence(ctx, roomID, clientID); err != nil {
+			log.Error().Err(err).Str("room_id", roomID).Str("client_id", clientID).Msg("failed to delete presence on disconnect")
+		}
+		broadcaster.BroadcastPresenceLeave(h, roomID, clientID, client.User.ID)
+	}
 
 	if roomEmpty {
 		ctx := context.Background()

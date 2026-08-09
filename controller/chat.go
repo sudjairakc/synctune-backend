@@ -129,9 +129,19 @@ func HandleJoin(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		settings = &model.AppSettings{}
 	}
 
+	if _, err := spawnPresence(h, client, roomID); err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Msg("HandleJoin: failed to spawn presence")
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "SERVER_ERROR", Message: "เกิดข้อผิดพลาดภายใน"})
+		return
+	}
+	presenceState, err := h.Store().GetAllPresence(ctx, roomID)
+	if err != nil {
+		presenceState = []model.Presence{}
+	}
+
 	log.Info().Str("event", "join").Str("user_id", user.ID).Str("username", user.Username).Str("room_id", roomID).Msg("user joined room")
 
-	broadcaster.SendRoomJoined(h, client.Conn, roomID, state, history, chatHistory, h.OnlineUsersInRoom(roomID), soundPad, soundPadHistory, settings.AllowSkipBroadcast)
+	broadcaster.SendRoomJoined(h, client.Conn, roomID, state, history, chatHistory, h.OnlineUsersInRoom(roomID), soundPad, soundPadHistory, presenceState, settings.AllowSkipBroadcast)
 	broadcaster.BroadcastUserJoined(h, roomID, user, h.OnlineUsersInRoom(roomID))
 
 	// ส่ง pins ปัจจุบันให้ client ที่ join

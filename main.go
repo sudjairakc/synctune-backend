@@ -194,6 +194,8 @@ func main() {
 			controller.HandleSoundPadStop(h, client, msg.Payload)
 		case "vote_cast":
 			controller.HandleVoteCast(h, client, msg.Payload)
+		case "presence_update":
+			controller.HandlePresenceUpdate(h, client, msg.Payload)
 		default:
 			log.Warn().Str("event", msg.Event).Msg("unknown event received")
 		}
