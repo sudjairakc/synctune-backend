@@ -43,6 +43,9 @@ func roomLastEmptiedKey(roomID string) string { return "synctune:room:" + roomID
 // roomVoteKey คืน Redis key สำหรับ active vote ของห้องนั้น
 func roomVoteKey(roomID string) string { return "synctune:room:" + roomID + ":vote" }
 
+// roomPresenceKey คืน Redis key สำหรับ presence HASH ของห้องนั้น (field = connection_id)
+func roomPresenceKey(roomID string) string { return "synctune:room:" + roomID + ":presence" }
+
 // Store กำหนด Interface สำหรับการเข้าถึง Storage
 type Store interface {
 	GetState(ctx context.Context, roomID string) (*model.PlaylistState, error)
@@ -89,6 +92,12 @@ type Store interface {
 	GetSettings(ctx context.Context) (*model.AppSettings, error)
 	// SetSettings บันทึก global app settings
 	SetSettings(ctx context.Context, s *model.AppSettings) error
+	// SetPresence บันทึก Presence ของ connection ในห้อง (HASH field = connection_id)
+	SetPresence(ctx context.Context, roomID string, p model.Presence) error
+	// GetAllPresence คืน Presence ทั้งหมดในห้อง
+	GetAllPresence(ctx context.Context, roomID string) ([]model.Presence, error)
+	// DeletePresence ลบ Presence ของ connection ออกจากห้อง
+	DeletePresence(ctx context.Context, roomID, connectionID string) error
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -459,9 +468,47 @@ func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 		roomSoundPadKey(roomID),
 		roomSoundPadHistoryKey(roomID),
 		roomLastEmptiedKey(roomID),
+		roomPresenceKey(roomID),
 	}
 	if err := s.client.Del(ctx, keys...).Err(); err != nil {
 		return fmt.Errorf("DeleteRoom: %w", err)
+	}
+	return nil
+}
+
+// SetPresence บันทึก Presence เป็น JSON ใน HASH field = connection_id
+func (s *RedisStore) SetPresence(ctx context.Context, roomID string, p model.Presence) error {
+	data, err := json.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("SetPresence: marshal: %w", err)
+	}
+	if err := s.client.HSet(ctx, roomPresenceKey(roomID), p.ConnectionID, data).Err(); err != nil {
+		return fmt.Errorf("SetPresence: redis HSET: %w", err)
+	}
+	return nil
+}
+
+// GetAllPresence ดึง Presence ทั้งหมดจาก HASH ของห้อง (ข้าม field ที่ unmarshal ไม่ได้)
+func (s *RedisStore) GetAllPresence(ctx context.Context, roomID string) ([]model.Presence, error) {
+	vals, err := s.client.HGetAll(ctx, roomPresenceKey(roomID)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("GetAllPresence: redis HGETALL: %w", err)
+	}
+	out := make([]model.Presence, 0, len(vals))
+	for _, raw := range vals {
+		var p model.Presence
+		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// DeletePresence ลบ Presence ของ connection_id ออกจาก HASH ของห้อง
+func (s *RedisStore) DeletePresence(ctx context.Context, roomID, connectionID string) error {
+	if err := s.client.HDel(ctx, roomPresenceKey(roomID), connectionID).Err(); err != nil {
+		return fmt.Errorf("DeletePresence: redis HDEL: %w", err)
 	}
 	return nil
 }
