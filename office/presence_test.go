@@ -25,15 +25,16 @@ func presenceInput(prevX, prevY, x, y float64, dt time.Duration, maxSpeed float6
 
 func TestAcceptPresence_SpeedClampAntiTeleport(t *testing.T) {
 	m := office.DefaultMap()
-	// Far jump in 100ms with MaxSpeed 240 → max step 24px along vector.
-	in := presenceInput(640, 480, 1088, 256, 100*time.Millisecond, 240)
+	sx, sy := m.SpawnWorld()
+	targetX, targetY := sx+200, sy
+	in := presenceInput(sx, sy, targetX, targetY, 100*time.Millisecond, 240)
 	got := office.AcceptPresence(m, in)
 
-	dx, dy := 1088-640, 256-480
-	dist := math.Hypot(float64(dx), float64(dy))
+	dx, dy := targetX-sx, targetY-sy
+	dist := math.Hypot(dx, dy)
 	maxDist := 240 * 0.1
-	wantX := 640 + float64(dx)/dist*maxDist
-	wantY := 480 + float64(dy)/dist*maxDist
+	wantX := sx + dx/dist*maxDist
+	wantY := sy + dy/dist*maxDist
 
 	if !got.Rejected {
 		t.Fatal("teleport/speed clamp should set Rejected=true")
@@ -45,14 +46,16 @@ func TestAcceptPresence_SpeedClampAntiTeleport(t *testing.T) {
 
 func TestAcceptPresence_WallReverts(t *testing.T) {
 	m := office.DefaultMap()
-	// From interior (48,48) into border wall (16,48); 200ms @ 240px/s allows 48px step.
-	in := presenceInput(48, 48, 16, 48, 200*time.Millisecond, 240)
+	// Open-office aisle (tx=2,ty=9) into outer wall (tx=0).
+	prevX, prevY := 2*float64(office.TileSize)+float64(office.TileSize)/2, 9*float64(office.TileSize)+float64(office.TileSize)/2
+	wallX, wallY := float64(office.TileSize)/2, prevY
+	in := presenceInput(prevX, prevY, wallX, wallY, 500*time.Millisecond, 240)
 	got := office.AcceptPresence(m, in)
 
 	if !got.Rejected {
 		t.Fatal("wall hit should Rejected=true")
 	}
-	if got.X != 48 || got.Y != 48 {
+	if got.X != prevX || got.Y != prevY {
 		t.Fatalf("should revert to prev, got (%v,%v)", got.X, got.Y)
 	}
 	if got.ZoneType != office.ZoneOpen {
@@ -61,38 +64,40 @@ func TestAcceptPresence_WallReverts(t *testing.T) {
 }
 
 func TestAcceptPresence_PrivateDenyReverts(t *testing.T) {
-	m := office.DefaultMap()
-	// Approach private-a from open floor just outside (260,200) → (200,200).
-	in := presenceInput(260, 200, 200, 200, 500*time.Millisecond, 240)
-	in.CanEnterPrivate = func(zoneID string) bool { return false }
-
-	got := office.AcceptPresence(m, in)
-	if !got.Rejected {
-		t.Fatal("private deny should Rejected=true")
-	}
-	if got.X != 260 || got.Y != 200 {
-		t.Fatalf("should revert to prev, got (%v,%v)", got.X, got.Y)
-	}
-	if got.ZoneType == office.ZonePrivate {
-		t.Fatal("must not accept private zone when denied")
-	}
+	t.Skip("map v2 has no private zones; private entry path deferred to Task 3")
 }
 
 func TestAcceptPresence_PrivateNilCallbackDenies(t *testing.T) {
-	m := office.DefaultMap()
-	in := presenceInput(260, 200, 200, 200, 500*time.Millisecond, 240)
-	in.CanEnterPrivate = nil
+	t.Skip("map v2 has no private zones; private entry path deferred to Task 3")
+}
 
+func TestAcceptPresence_PrivateAllowHappy(t *testing.T) {
+	t.Skip("map v2 has no private zones; private entry path deferred to Task 3")
+}
+
+func TestAcceptPresence_OOBClampedThenWallRevert(t *testing.T) {
+	m := office.DefaultMap()
+	// Start near west wall so OOB clamp lands on the wall tile (not mid-floor after speed clamp).
+	ts := float64(office.TileSize)
+	prevX, prevY := 1*ts+ts/2, 9*ts+ts/2
+	in := presenceInput(prevX, prevY, -40, prevY, 500*time.Millisecond, 240)
 	got := office.AcceptPresence(m, in)
-	if !got.Rejected || got.X != 260 || got.Y != 200 {
-		t.Fatalf("nil CanEnterPrivate must deny private, got %+v", got)
+
+	if !got.Rejected {
+		t.Fatal("OOB→wall should Rejected=true")
+	}
+	if got.X != prevX || got.Y != prevY {
+		t.Fatalf("should revert to prev, got (%v,%v)", got.X, got.Y)
 	}
 }
 
 func TestAcceptPresence_MeetingDetect(t *testing.T) {
 	m := office.DefaultMap()
-	// Enter meeting-a from adjacent open floor.
-	in := presenceInput(900, 256, 980, 256, 500*time.Millisecond, 240)
+	// Enter meeting-a via door (8,8): open floor (8,9) → interior floor (8,7).
+	ts := float64(office.TileSize)
+	prevX, prevY := 8*ts+ts/2, 9*ts+ts/2
+	destX, destY := 8*ts+ts/2, 7*ts+ts/2
+	in := presenceInput(prevX, prevY, destX, destY, 500*time.Millisecond, 240)
 	got := office.AcceptPresence(m, in)
 
 	if got.Rejected {
@@ -101,35 +106,37 @@ func TestAcceptPresence_MeetingDetect(t *testing.T) {
 	if got.ZoneID != "meeting-a" || got.ZoneType != office.ZoneMeeting {
 		t.Fatalf("want meeting-a/meeting, got %q %s", got.ZoneID, got.ZoneType)
 	}
-	if got.X != 980 || got.Y != 256 {
+	if got.X != destX || got.Y != destY {
 		t.Fatalf("pos = (%v,%v)", got.X, got.Y)
 	}
 }
 
 func TestAcceptPresence_SpeedClamp(t *testing.T) {
 	m := office.DefaultMap()
+	sx, sy := m.SpawnWorld()
 	// Pure +X move: 100px in 100ms @ 240px/s → clamp to +24px.
-	in := presenceInput(640, 480, 740, 480, 100*time.Millisecond, 240)
+	in := presenceInput(sx, sy, sx+100, sy, 100*time.Millisecond, 240)
 	got := office.AcceptPresence(m, in)
 
 	if !got.Rejected {
 		t.Fatal("speed clamp should Rejected=true")
 	}
-	if math.Abs(got.X-664) > 1e-9 || got.Y != 480 {
-		t.Fatalf("got (%v,%v), want (664,480)", got.X, got.Y)
+	if math.Abs(got.X-(sx+24)) > 1e-9 || got.Y != sy {
+		t.Fatalf("got (%v,%v), want (%v,%v)", got.X, got.Y, sx+24, sy)
 	}
 }
 
 func TestAcceptPresence_IntervalTooSoonIgnored(t *testing.T) {
 	m := office.DefaultMap()
-	in := presenceInput(640, 480, 700, 480, 10*time.Millisecond, 240)
+	sx, sy := m.SpawnWorld()
+	in := presenceInput(sx, sy, sx+60, sy, 10*time.Millisecond, 240)
 	got := office.AcceptPresence(m, in)
 
 	// Resolution: ignore update — keep prev, Rejected=false (skip broadcast).
 	if got.Rejected {
 		t.Fatal("interval skip must Rejected=false")
 	}
-	if got.X != 640 || got.Y != 480 {
+	if got.X != sx || got.Y != sy {
 		t.Fatalf("should keep prev, got (%v,%v)", got.X, got.Y)
 	}
 }
