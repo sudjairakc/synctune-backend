@@ -1,5 +1,7 @@
 # CLAUDE.md — synctune-backend
-## Go Backend · net/http + Melody + Redis · v1.0.1
+## Go Backend · net/http + Melody + Redis · LiveKit mint · v2.0.0
+
+Product: **SyncTune** (no “2.0 Office” branding). Office map + presence + LiveKit JWT mint.
 
 อ่านไฟล์นี้ก่อนทำงานใดๆ ใน repo นี้เสมอ
 
@@ -90,8 +92,12 @@ synctune-backend/
 │   ├── queue.go               ← Business logic: add/remove/reorder/skip/song_ended/playback_mode
 │   ├── chat.go                ← Business logic: join (room) / send_message
 │   ├── soundpad.go            ← SoundPad: set/clear/play/stop handlers
-│   ├── voice.go               ← Voice PTT: WebRTC signaling relay handlers
+│   ├── voice.go               ← Legacy Voice PTT WebRTC signaling relay
+│   ├── livekit_token.go       ← LiveKit JWT mint + voice_credentials
+│   ├── presence.go / private.go / bubble.go / follow.go / bell.go
+│   ├── office_chat.go / channel_hydrate.go
 │   └── vote.go                ← Voting: startVote / HandleVoteCast / resolveVote
+├── office/                    ← map_v2.json + walk/zone/spawn
 ├── broadcaster/               ← Broadcast helpers (ทุกฟังก์ชันรับ roomID)
 ├── broadcast/scheduler.go     ← Scheduled broadcast per room (cron-based)
 ├── ticker/seekticker.go       ← seek_sync Goroutine ทุก 5 วิ (per-room)

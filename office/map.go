@@ -45,7 +45,7 @@ type zoneRect struct {
 	maxY float64
 }
 
-// OfficeMap is the fixed SyncTune 2.0 office template loaded from map_v2.json.
+// OfficeMap is the fixed SyncTune office map template loaded from map_v2.json.
 type OfficeMap struct {
 	tileSize int
 	tilesW   int

@@ -2,9 +2,9 @@
 
 > ⚠️ **Experimental project** — built for personal learning and exploration. Not intended for commercial use.
 
-![Version](https://img.shields.io/badge/version-1.0.1-blue)
+![Version](https://img.shields.io/badge/version-2.0.0-blue)
 
-A Go backend for SyncTune — a real-time collaborative music listening app. Handles multi-room state, WebSocket broadcasting, SoundPad, Voice PTT signaling, and voting.
+A Go backend for **SyncTune** — a real-time collaborative music listening app with an office map layer. Handles multi-room state, WebSocket broadcasting, SoundPad, LiveKit voice credentials (meeting/bubble), legacy PTT signaling, and voting.
 
 **Stack:** Go · net/http · Melody (WebSocket) · Redis · zerolog
 
@@ -101,8 +101,12 @@ synctune-backend/
 │   ├── queue.go               ← Queue + playback business logic
 │   ├── chat.go                ← Chat + join/room logic
 │   ├── soundpad.go            ← SoundPad handlers
-│   ├── voice.go               ← Voice PTT WebRTC signaling handlers
+│   ├── voice.go               ← Legacy Voice PTT WebRTC signaling relay
+│   ├── livekit_token.go       ← LiveKit JWT mint + voice_credentials
+│   ├── presence.go / private.go / bubble.go / follow.go / bell.go
+│   ├── office_chat.go / channel_hydrate.go
 │   └── vote.go                ← Voting system handlers
+├── office/                    ← map_v2.json + walk/zone/spawn
 ├── broadcaster/broadcaster.go ← Broadcast helpers (per-room)
 ├── broadcast/scheduler.go     ← Cron-based scheduled broadcasts
 ├── ticker/seekticker.go       ← seek_sync goroutine (per-room)
@@ -235,7 +239,8 @@ synctune-backend/
 - **Autoplay / Shuffle / Random** — server-side playback logic
 - **Playback Speed** — synced via `set_playback_mode`
 - **SoundPad** — 50 slots per room; play triggers broadcast to all clients independently
-- **Voice PTT** — WebRTC signaling relay over WebSocket (peer-to-peer, no media server)
+- **Office map** — presence, zones, private rooms, follow/bell, office chat
+- **Office voice** — LiveKit JWT mint (`voice_credentials`); legacy mesh PTT relay remains
 - **Voting** — majority vote for remove/skip on songs added by others; 30 s TTL
 - **Rate limiting** — per-client, per-action limits
 - **Daily cleanup** — Redis room keys purged at 06:00 Asia/Bangkok
@@ -250,7 +255,7 @@ synctune-backend/
 - **join first** — the server returns `NOT_JOINED` for any event received before `join`
 - **queue_id vs video_id** — all events use `queue_id` (UUID), never the YouTube video ID
 - **SoundPad is independent** — each client manages its own audio; no global playback state
-- **Voice PTT is peer-to-peer** — backend only relays WebRTC signaling messages
+- **Office voice mints LiveKit JWTs only** — no RoomService admin; legacy PTT is signaling relay only
 - **Adder bypass** — the user who added a song can remove or skip it without a vote
 
 ---
@@ -310,6 +315,13 @@ docker run -d \
 ---
 
 ## Changelog
+
+### v2.0.0 (2026-08-09)
+- Product name: **SyncTune** (no “2.0 Office” branding)
+- Office map v2 (`office/map_v2.json`) — walk allow-list, meeting-a/b zones, spawn
+- Presence sanity, private-zone subsystem (optional on map), bubble, follow, bell
+- LiveKit JWT mint via `voice_credentials` (`bubble > meeting > null`)
+- Channel chat hydrate on join (meeting / DM / bubble)
 
 ### v1.0.1 (2026-05-16)
 - SoundPad: 50 slots per room — set/clear/play/stop with play history

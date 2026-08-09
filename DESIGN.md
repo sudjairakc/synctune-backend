@@ -1,5 +1,5 @@
 # DESIGN.md — synctune-backend
-## Architecture Decisions & Design Notes · v1.0.1
+## Architecture Decisions & Design Notes · v2.0.0
 
 ไฟล์นี้บันทึก design decisions ที่สำคัญ เหตุผลเบื้องหลัง และ trade-offs ที่เลือก
 
@@ -60,24 +60,15 @@ Broadcast เฉพาะ clients ในห้องเดียวกัน ไ
 
 ---
 
-## 5. Voice PTT — WebSocket Signaling Only (No Media Server)
+## 5. Office voice — LiveKit mint (primary) + legacy PTT relay
 
-**Decision:** Backend เป็นแค่ signaling relay สำหรับ WebRTC — ไม่มี SFU/MCU
+**Decision (current):** For meeting/bubble voice, backend **mints LiveKit JWTs only** (`voice_credentials`). No RoomService admin. Media stays in LiveKit. Invariant: `bubble > meeting > null`.
 
-**Reason:**
-- ไม่ต้องการ infrastructure เพิ่ม (TURN server, media server)
-- PTT ทั่วไปมีคนพูดทีละคน → peer connections ไม่เยอะ
-- Cost-effective สำหรับ small rooms
+**Reason:** SFU fits multi-party office zones better than mesh; hub stays music/chat authority.
 
-**Trade-off:** Speaker ต้อง connect กับทุก listener แยกกัน (mesh topology) — scale ไม่ดีถ้าห้องใหญ่มาก (20+ คน) แต่ use case ปัจจุบันคือ office จำนวนคนน้อย
+**Legacy:** WebRTC PTT signaling relay (`voice_start` / offer / answer / ice) remains for opt-in mesh clients.
 
-**Signaling flow:**
-```
-voice_start (broadcast) → listeners ส่ง voice_join → speaker
-speaker ส่ง voice_offer → แต่ละ listener
-listener ส่ง voice_answer → speaker
-ทั้งสองฝั่งแลก voice_ice candidates
-```
+**Trade-off:** Needs `LIVEKIT_URL` + API key/secret; without them credentials are empty and FE shows unavailable.
 
 ---
 

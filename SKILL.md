@@ -1,5 +1,7 @@
 # SKILL.md — synctune-backend
-## คู่มือ Claude Code Skills สำหรับ Go Backend
+## คู่มือ Claude Code Skills สำหรับ Go Backend · v2.0.0
+
+Product: **SyncTune** (no “2.0 Office” branding). Office map + LiveKit mint are features, not the product name.
 
 ไฟล์นี้รวม skill patterns ที่ใช้บ่อยใน repo นี้ ให้ Claude Code ใช้เป็น cheatsheet ก่อนเริ่มงาน
 
@@ -98,7 +100,19 @@ Pattern สำหรับ controller test:
 
 ---
 
-## 6. Debug Tips
+## 6. Office voice (LiveKit)
+
+Product name: **SyncTune** (UI/docs — no “2.0 Office” branding).
+
+- Mint JWT in `controller/livekit_token.go`; send `voice_credentials` on zone/bubble changes
+- Invariant: `bubble > meeting > null`
+- Needs `LIVEKIT_URL` + `LIVEKIT_API_KEY` + `LIVEKIT_API_SECRET`
+- Map: `office/map_v2.json` — walk allow-list `floor|chair|door`
+- Legacy mesh PTT stays in `controller/voice.go` for opt-in FE clients
+
+---
+
+## 7. Debug Tips
 
 ```bash
 # ดู event ที่ส่งผ่าน WebSocket ทั้งหมด
@@ -119,7 +133,7 @@ redis-cli KEYS "synctune:room:123456:*"
 
 ---
 
-## 7. Common Pitfalls
+## 8. Common Pitfalls
 
 | ปัญหา | วิธีแก้ |
 |---|---|
@@ -131,7 +145,7 @@ redis-cli KEYS "synctune:room:123456:*"
 
 ---
 
-## 8. Checklist ก่อน PR
+## 9. Checklist ก่อน PR
 
 - [ ] Handler ตรวจ `requireJoined` ก่อน
 - [ ] Validate payload — return เงียบๆ ถ้า invalid (ไม่ crash)
