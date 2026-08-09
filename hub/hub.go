@@ -247,6 +247,18 @@ func (h *Hub) OnlineUsersInRoom(roomID string) []model.User {
 	return users
 }
 
+// ClientsInRoom คืน snapshot ของ Client ในห้อง (pointers; อ่าน field ด้วยความระมัดระวังเรื่อง race)
+func (h *Hub) ClientsInRoom(roomID string) []*Client {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	roomClients := h.rooms[roomID]
+	out := make([]*Client, 0, len(roomClients))
+	for _, c := range roomClients {
+		out = append(out, c)
+	}
+	return out
+}
+
 // SendToClient ส่ง Event ไปยัง Client ที่ระบุด้วย clientID
 func (h *Hub) SendToClient(clientID, event string, payload interface{}) {
 	h.mu.RLock()

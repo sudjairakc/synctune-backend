@@ -15,22 +15,24 @@ import (
 // embed store.Store (nil) → method ที่ไม่ override จะ panic ถ้าถูกเรียก (จับ path ที่ไม่คาดคิด)
 type fakeStore struct {
 	store.Store
-	state    map[string][]byte // roomID → marshaled PlaylistState (จำลอง Redis ที่ serialize ทุกครั้ง)
-	history  map[string][]model.HistorySong
-	vote     map[string]*model.Vote
-	claims   map[string]bool // "roomID:queueID" → claimed (จำลอง SET NX)
-	settings model.AppSettings
-	presence map[string]map[string]model.Presence // roomID → connectionID → Presence
+	state      map[string][]byte // roomID → marshaled PlaylistState (จำลอง Redis ที่ serialize ทุกครั้ง)
+	history    map[string][]model.HistorySong
+	vote       map[string]*model.Vote
+	claims     map[string]bool // "roomID:queueID" → claimed (จำลอง SET NX)
+	settings   model.AppSettings
+	presence   map[string]map[string]model.Presence // roomID → connectionID → Presence
+	channelMsg map[string][]model.ChatMessage       // "roomID\x00channel" → messages (newest first)
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
-		state:    map[string][]byte{},
-		history:  map[string][]model.HistorySong{},
-		vote:     map[string]*model.Vote{},
-		claims:   map[string]bool{},
-		settings: model.AppSettings{AllowSkipBroadcast: true}, // default: replay feature เปิด
-		presence: map[string]map[string]model.Presence{},
+		state:      map[string][]byte{},
+		history:    map[string][]model.HistorySong{},
+		vote:       map[string]*model.Vote{},
+		claims:     map[string]bool{},
+		settings:   model.AppSettings{AllowSkipBroadcast: true}, // default: replay feature เปิด
+		presence:   map[string]map[string]model.Presence{},
+		channelMsg: map[string][]model.ChatMessage{},
 	}
 }
 
@@ -91,12 +93,21 @@ func (f *fakeStore) GetChatHistory(_ context.Context, _ string) ([]model.ChatMes
 	return nil, nil
 }
 
-func (f *fakeStore) PushChannelMessage(_ context.Context, _, _ string, _ model.ChatMessage) error {
+func (f *fakeStore) PushChannelMessage(_ context.Context, roomID, channel string, msg model.ChatMessage) error {
+	key := roomID + "\x00" + channel
+	f.channelMsg[key] = append([]model.ChatMessage{msg}, f.channelMsg[key]...)
 	return nil
 }
 
-func (f *fakeStore) GetChannelHistory(_ context.Context, _, _ string, _ int) ([]model.ChatMessage, error) {
-	return nil, nil
+func (f *fakeStore) GetChannelHistory(_ context.Context, roomID, channel string, limit int) ([]model.ChatMessage, error) {
+	key := roomID + "\x00" + channel
+	msgs := f.channelMsg[key]
+	if limit <= 0 || limit > len(msgs) {
+		limit = len(msgs)
+	}
+	out := make([]model.ChatMessage, limit)
+	copy(out, msgs[:limit])
+	return out, nil
 }
 
 func (f *fakeStore) GetSoundPad(_ context.Context, _ string) ([]*model.SoundPadSlot, error) {
