@@ -200,6 +200,8 @@ func main() {
 			controller.HandleMeetingSend(h, client, msg.Payload)
 		case "dm_send":
 			controller.HandleDMSend(h, client, msg.Payload)
+		case "bubble_send":
+			controller.HandleBubbleSend(h, client, msg.Payload)
 		case "follow_start":
 			controller.HandleFollowStart(h, client, msg.Payload)
 		case "follow_stop":

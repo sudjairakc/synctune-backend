@@ -177,3 +177,69 @@ func TestDMSendRejectMissingTarget(t *testing.T) {
 		t.Fatalf("error code = %v, want TARGET_NOT_FOUND", errPayload["code"])
 	}
 }
+
+func TestBubbleSendNotVisibleToOutsider(t *testing.T) {
+	const roomID = "200005"
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+
+	alice, inboxA, cleanupA := registerJoined(t, h, roomID, "alice")
+	defer cleanupA()
+	bob, inboxB, cleanupB := registerJoined(t, h, roomID, "bob")
+	defer cleanupB()
+	_, inboxC, cleanupC := registerJoined(t, h, roomID, "carol")
+	defer cleanupC()
+
+	// A invites B; B accepts → bubble with A+B
+	invite, _ := json.Marshal(bubbleInvitePayload{ToConnectionID: bob.ID})
+	HandleBubbleInvite(h, alice, invite)
+	inviteEvt := waitCollectedEvent(t, inboxB, "bubble_invite", 2*time.Second, nil)
+	bubbleID, _ := inviteEvt["bubble_id"].(string)
+	if bubbleID == "" {
+		t.Fatal("expected bubble_id in invite")
+	}
+	accept, _ := json.Marshal(bubbleAcceptPayload{BubbleID: bubbleID})
+	HandleBubbleAccept(h, bob, accept)
+	_ = waitCollectedEvent(t, inboxA, "bubble_updated", 2*time.Second, func(p map[string]interface{}) bool {
+		return p["bubble_id"] == bubbleID
+	})
+
+	payload, _ := json.Marshal(bubbleSendPayload{BubbleID: bubbleID, Text: "bubble only"})
+	HandleBubbleSend(h, alice, payload)
+
+	msgA := waitCollectedEvent(t, inboxA, "bubble_message", 2*time.Second, nil)
+	msgB := waitCollectedEvent(t, inboxB, "bubble_message", 2*time.Second, nil)
+	assertNoEvent(t, inboxC, "bubble_message", 200*time.Millisecond)
+
+	wantChannel := "bubble:" + bubbleID
+	if msgA["channel"] != wantChannel || msgB["channel"] != wantChannel {
+		t.Fatalf("channels a=%v b=%v, want %s", msgA["channel"], msgB["channel"], wantChannel)
+	}
+	if msgA["text"] != "bubble only" {
+		t.Fatalf("text = %v, want bubble only", msgA["text"])
+	}
+
+	hist, _ := fs.GetChannelHistory(context.Background(), roomID, wantChannel, 10)
+	if len(hist) != 1 {
+		t.Fatalf("bubble history len = %d, want 1", len(hist))
+	}
+}
+
+func TestBubbleSendRejectOutsideBubble(t *testing.T) {
+	const roomID = "200006"
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+
+	alice, inbox, cleanup := registerJoined(t, h, roomID, "alice")
+	defer cleanup()
+
+	payload, _ := json.Marshal(bubbleSendPayload{BubbleID: "nope", Text: "hi"})
+	HandleBubbleSend(h, alice, payload)
+
+	errPayload := waitCollectedEvent(t, inbox, "error", 2*time.Second, nil)
+	if errPayload["code"] != "NOT_IN_BUBBLE" {
+		t.Fatalf("error code = %v, want NOT_IN_BUBBLE", errPayload["code"])
+	}
+}

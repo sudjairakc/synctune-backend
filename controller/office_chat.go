@@ -27,6 +27,12 @@ type dmSendPayload struct {
 	Text           string `json:"text"`
 }
 
+// bubbleSendPayload คือ Payload ของ event bubble_send
+type bubbleSendPayload struct {
+	BubbleID string `json:"bubble_id"`
+	Text     string `json:"text"`
+}
+
 // officeChatEventPayload คือ payload ของ meeting_message / dm_message
 // (shape ใกล้ message_received + ฟิลด์ channel)
 type officeChatEventPayload struct {
@@ -183,4 +189,82 @@ func HandleDMSend(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	h.SendToClient(target.ID, "dm_message", out)
 
 	log.Info().Str("event", "dm_send").Str("user_id", client.User.ID).Str("to", target.User.ID).Str("channel", channel).Msg("dm message sent")
+}
+
+// HandleBubbleSend จัดการ Event bubble_send — ส่งเฉพาะสมาชิก bubble (ไม่ broadcast ทั้งห้อง)
+func HandleBubbleSend(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
+	if client.User.ID == "" || client.RoomID == "" {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "NOT_JOINED", Message: "ต้องส่ง join ก่อน"})
+		return
+	}
+
+	if !client.ChatLimiter.Allow() {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "RATE_LIMITED", Message: "ส่งข้อความบ่อยเกินไป"})
+		return
+	}
+
+	var payload bubbleSendPayload
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "INVALID_MESSAGE", Message: "รูปแบบ Payload ไม่ถูกต้อง"})
+		return
+	}
+
+	bubbleID := strings.TrimSpace(payload.BubbleID)
+	if bubbleID == "" {
+		bubbleID = client.BubbleID
+	}
+	text := strings.TrimSpace(payload.Text)
+	if bubbleID == "" {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "NOT_IN_BUBBLE", Message: "ต้องอยู่ใน bubble ก่อนส่งข้อความ"})
+		return
+	}
+	if client.BubbleID != bubbleID {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "NOT_IN_BUBBLE", Message: "คุณไม่ได้อยู่ใน bubble นี้"})
+		return
+	}
+	if text == "" {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "EMPTY_MESSAGE", Message: "ข้อความว่าง"})
+		return
+	}
+	if utf8.RuneCountInString(text) > maxMessageLen {
+		text = string([]rune(text)[:maxMessageLen])
+	}
+
+	ctx := context.Background()
+	b, err := h.Store().GetBubble(ctx, client.RoomID, bubbleID)
+	if err != nil {
+		log.Error().Err(err).Str("room_id", client.RoomID).Msg("HandleBubbleSend: GetBubble failed")
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "INTERNAL_ERROR", Message: "ไม่สามารถส่งข้อความได้"})
+		return
+	}
+	if b == nil || !containsConn(b.Members, client.ID) {
+		h.SendToSession(client.Conn, "error", model.WSError{Code: "NOT_IN_BUBBLE", Message: "คุณไม่ได้อยู่ใน bubble นี้"})
+		return
+	}
+
+	channel := "bubble:" + bubbleID
+	msg := model.ChatMessage{
+		ID:        uuid.New().String(),
+		User:      client.User,
+		Text:      text,
+		Timestamp: time.Now().UnixMilli(),
+	}
+
+	if err := h.Store().PushChannelMessage(ctx, client.RoomID, channel, msg); err != nil {
+		log.Error().Err(err).Str("channel", channel).Msg("HandleBubbleSend: PushChannelMessage failed")
+	}
+
+	out := officeChatEventPayload{
+		Channel:   channel,
+		ID:        msg.ID,
+		User:      msg.User,
+		Text:      msg.Text,
+		Timestamp: msg.Timestamp,
+	}
+
+	for _, memberID := range b.Members {
+		h.SendToClient(memberID, "bubble_message", out)
+	}
+
+	log.Info().Str("event", "bubble_send").Str("user_id", client.User.ID).Str("channel", channel).Msg("bubble message sent")
 }
