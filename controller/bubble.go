@@ -121,6 +121,7 @@ func HandleBubbleInvite(h *hub.Hub, client *hub.Client, rawPayload json.RawMessa
 		client.BubbleID = b.ID
 		persistBubblePresence(h, client)
 		broadcastBubble(h, roomID, b)
+		SyncActiveVoice(h, client)
 	}
 
 	h.SendToClient(target.ID, "bubble_invite", bubbleInviteEventPayload{
@@ -193,6 +194,7 @@ func HandleBubbleAccept(h *hub.Hub, client *hub.Client, rawPayload json.RawMessa
 	client.BubbleID = bubbleID
 	persistBubblePresence(h, client)
 	broadcastBubble(h, roomID, b)
+	SyncActiveVoice(h, client)
 	log.Info().Str("event", "bubble_accept").Str("bubble_id", bubbleID).Str("connection_id", client.ID).Msg("bubble accepted")
 }
 
@@ -225,6 +227,7 @@ func leaveBubbleMembership(h *hub.Hub, client *hub.Client) {
 
 	client.BubbleID = ""
 	persistBubblePresence(h, client)
+	SyncActiveVoice(h, client)
 
 	if b == nil {
 		return

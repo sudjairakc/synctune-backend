@@ -152,6 +152,9 @@ func HandleJoin(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	if err == nil && len(pins) > 0 {
 		broadcaster.BroadcastPinsUpdated(h, roomID, pins)
 	}
+
+	// Recompute voice on join/reconnect restore (spawn or restored social state).
+	SyncActiveVoice(h, client)
 }
 
 // HandleSendMessage จัดการ Event send_message (รองรับ reply, thread, image)

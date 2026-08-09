@@ -252,6 +252,11 @@ func main() {
 	})
 
 	m.HandleDisconnect(func(s *melody.Session) {
+		if id, ok := s.Get("client_id"); ok {
+			if c := h.GetClient(id.(string)); c != nil {
+				controller.ClearVoiceOnDisconnect(h, c)
+			}
+		}
 		h.Unregister(s)
 	})
 

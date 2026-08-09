@@ -86,6 +86,32 @@ func EmitVoiceCredentials(h *hub.Hub, client *hub.Client, cfg *config.Config, gr
 	h.SendToSession(client.Conn, "voice_credentials", creds)
 }
 
+// SyncActiveVoice recomputes DeriveActiveVoiceGroup and emits credentials only when
+// the group changes. Switching groups emits a single payload with the new group_id
+// (client must dispose the previous LiveKit session before joining — never two groups).
+func SyncActiveVoice(h *hub.Hub, client *hub.Client) {
+	if h == nil || client == nil || client.RoomID == "" {
+		return
+	}
+	m := office.DefaultMap()
+	zoneID, zoneType := m.ZoneAt(client.LastX, client.LastY)
+	groupID := office.DeriveActiveVoiceGroup(client.RoomID, client.BubbleID, zoneID, zoneType)
+	if groupID == client.ActiveVoiceGroup {
+		return
+	}
+	EmitVoiceCredentials(h, client, config.Load(), groupID)
+	client.ActiveVoiceGroup = groupID
+}
+
+// ClearVoiceOnDisconnect emits clear credentials when the connection had an active group.
+func ClearVoiceOnDisconnect(h *hub.Hub, client *hub.Client) {
+	if h == nil || client == nil || client.ActiveVoiceGroup == "" {
+		return
+	}
+	EmitVoiceCredentials(h, client, config.Load(), "")
+	client.ActiveVoiceGroup = ""
+}
+
 // HandleVoiceTokenRequest remints credentials for the client's current active group.
 func HandleVoiceTokenRequest(h *hub.Hub, client *hub.Client, _ json.RawMessage) {
 	if client.User.ID == "" || client.RoomID == "" {
@@ -97,4 +123,5 @@ func HandleVoiceTokenRequest(h *hub.Hub, client *hub.Client, _ json.RawMessage) 
 	zoneID, zoneType := m.ZoneAt(client.LastX, client.LastY)
 	groupID := office.DeriveActiveVoiceGroup(client.RoomID, client.BubbleID, zoneID, zoneType)
 	EmitVoiceCredentials(h, client, config.Load(), groupID)
+	client.ActiveVoiceGroup = groupID
 }

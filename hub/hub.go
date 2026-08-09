@@ -38,8 +38,9 @@ type Client struct {
 	LastY          float64
 	LastZoneID     string
 	LastDir        string
-	FollowingID    string // connection_id ที่กำลัง follow; ว่าง = ไม่ follow
-	BubbleID       string // bubble ที่เป็นสมาชิก; ว่าง = ไม่อยู่ใน bubble
+	FollowingID      string // connection_id ที่กำลัง follow; ว่าง = ไม่ follow
+	BubbleID         string // bubble ที่เป็นสมาชิก; ว่าง = ไม่อยู่ใน bubble
+	ActiveVoiceGroup string // last emitted LiveKit group id; ว่าง = ไม่มี voice
 }
 
 // Hub จัดการ Connection Pool และ Broadcast

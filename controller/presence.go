@@ -109,6 +109,7 @@ func HandlePresenceUpdate(h *hub.Hub, client *hub.Client, rawPayload json.RawMes
 	if result.ZoneID != prevZone {
 		broadcaster.BroadcastZoneChanged(h, client.RoomID, client.ID, client.User.ID, result.ZoneID)
 	}
+	SyncActiveVoice(h, client)
 }
 
 // spawnPresence สร้าง Presence ที่จุด spawn และบันทึกลง store + client memory
