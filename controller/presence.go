@@ -24,9 +24,6 @@ var validDirs = map[string]bool{
 	"up": true, "down": true, "left": true, "right": true,
 }
 
-// canEnterPrivatePhase1 — Phase 1 stub: deny all private zones
-func canEnterPrivatePhase1(string) bool { return false }
-
 // HandlePresenceUpdate จัดการ Event presence_update
 func HandlePresenceUpdate(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 	if client.User.ID == "" || client.RoomID == "" {
@@ -52,18 +49,23 @@ func HandlePresenceUpdate(h *hub.Hub, client *hub.Client, rawPayload json.RawMes
 	cfg := config.Load()
 	now := time.Now()
 	minInterval := time.Duration(cfg.PresenceMinIntervalMs) * time.Millisecond
+	ctx := context.Background()
+	roomID := client.RoomID
+	connID := client.ID
 
 	m := office.DefaultMap()
 	result := office.AcceptPresence(m, office.SanityInput{
-		PrevX:           client.LastX,
-		PrevY:           client.LastY,
-		PrevTime:        client.LastPresenceAt,
-		X:               payload.X,
-		Y:               payload.Y,
-		Now:             now,
-		MaxSpeedPxS:     float64(cfg.PresenceMaxSpeedPxPerSec),
-		MinInterval:     minInterval,
-		CanEnterPrivate: canEnterPrivatePhase1,
+		PrevX:       client.LastX,
+		PrevY:       client.LastY,
+		PrevTime:    client.LastPresenceAt,
+		X:           payload.X,
+		Y:           payload.Y,
+		Now:         now,
+		MaxSpeedPxS: float64(cfg.PresenceMaxSpeedPxPerSec),
+		MinInterval: minInterval,
+		CanEnterPrivate: func(zoneID string) bool {
+			return canEnterPrivate(ctx, h.Store(), roomID, zoneID, connID)
+		},
 	})
 
 	// Interval-too-soon ignore: Rejected=false + position unchanged → skip broadcast/persist
@@ -84,7 +86,6 @@ func HandlePresenceUpdate(h *hub.Hub, client *hub.Client, rawPayload json.RawMes
 		FollowingID:  client.FollowingID,
 	}
 
-	ctx := context.Background()
 	if err := h.Store().SetPresence(ctx, client.RoomID, p); err != nil {
 		log.Error().Err(err).Str("room_id", client.RoomID).Msg("HandlePresenceUpdate: SetPresence failed")
 		return
@@ -96,6 +97,8 @@ func HandlePresenceUpdate(h *hub.Hub, client *hub.Client, rawPayload json.RawMes
 	client.LastZoneID = result.ZoneID
 	client.LastDir = dir
 	client.LastPresenceAt = now
+
+	syncPrivateOccupancy(ctx, h.Store(), client.RoomID, client.ID, prevZone, result.ZoneID)
 
 	broadcaster.BroadcastPresenceUpdate(h, client.RoomID, p)
 

@@ -52,6 +52,11 @@ func roomVoteKey(roomID string) string { return "synctune:room:" + roomID + ":vo
 // roomPresenceKey คืน Redis key สำหรับ presence HASH ของห้องนั้น (field = connection_id)
 func roomPresenceKey(roomID string) string { return "synctune:room:" + roomID + ":presence" }
 
+// roomPrivateZoneKey คืน Redis key สำหรับ private zone state (occupants + invites)
+func roomPrivateZoneKey(roomID, zoneID string) string {
+	return "synctune:room:" + roomID + ":private:" + zoneID
+}
+
 // Store กำหนด Interface สำหรับการเข้าถึง Storage
 type Store interface {
 	GetState(ctx context.Context, roomID string) (*model.PlaylistState, error)
@@ -108,6 +113,14 @@ type Store interface {
 	DeletePresence(ctx context.Context, roomID, connectionID string) error
 	// TryClaimBell ใช้ SET NX + TTL สำหรับ rate-limit bell ต่อคู่ from→to — true ถ้า claim สำเร็จ
 	TryClaimBell(ctx context.Context, roomID, fromConnectionID, toConnectionID string, ttl time.Duration) (bool, error)
+	// GetPrivateZoneState โหลด occupants/invites ของ private zone — คืน empty state ถ้ายังไม่มี key
+	GetPrivateZoneState(ctx context.Context, roomID, zoneID string) (*model.PrivateZoneState, error)
+	// SetPrivateZoneState บันทึก occupants/invites ของ private zone
+	SetPrivateZoneState(ctx context.Context, roomID, zoneID string, state *model.PrivateZoneState) error
+	// DeletePrivateZoneState ลบ key ของ private zone
+	DeletePrivateZoneState(ctx context.Context, roomID, zoneID string) error
+	// RemoveConnectionFromPrivateZones ลบ connection ออกจากทุก private zone ของห้อง (disconnect)
+	RemoveConnectionFromPrivateZones(ctx context.Context, roomID, connectionID string) error
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -506,7 +519,7 @@ func (s *RedisStore) GetSoundPadHistory(ctx context.Context, roomID string) ([]m
 	return events, nil
 }
 
-// DeleteRoom ลบ Redis keys ทั้งหมดของห้องนั้น รวม channel chat keys (SCAN chat:*)
+// DeleteRoom ลบ Redis keys ทั้งหมดของห้องนั้น รวม channel chat + private zone keys (SCAN)
 func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 	keys := []string{
 		roomStateKey(roomID),
@@ -518,17 +531,21 @@ func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 		roomLastEmptiedKey(roomID),
 		roomPresenceKey(roomID),
 	}
-	var cursor uint64
-	pattern := "synctune:room:" + roomID + ":chat:*"
-	for {
-		batch, next, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
-		if err != nil {
-			return fmt.Errorf("DeleteRoom: scan chat: %w", err)
-		}
-		keys = append(keys, batch...)
-		cursor = next
-		if cursor == 0 {
-			break
+	for _, pattern := range []string{
+		"synctune:room:" + roomID + ":chat:*",
+		"synctune:room:" + roomID + ":private:*",
+	} {
+		var cursor uint64
+		for {
+			batch, next, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
+			if err != nil {
+				return fmt.Errorf("DeleteRoom: scan %s: %w", pattern, err)
+			}
+			keys = append(keys, batch...)
+			cursor = next
+			if cursor == 0 {
+				break
+			}
 		}
 	}
 	if err := s.client.Del(ctx, keys...).Err(); err != nil {
@@ -632,6 +649,107 @@ func (s *RedisStore) TryClaimBell(ctx context.Context, roomID, fromConnectionID,
 		return false, fmt.Errorf("TryClaimBell: %w", err)
 	}
 	return ok, nil
+}
+
+// GetPrivateZoneState โหลด PrivateZoneState จาก Redis — คืน empty state ถ้ายังไม่มี key
+func (s *RedisStore) GetPrivateZoneState(ctx context.Context, roomID, zoneID string) (*model.PrivateZoneState, error) {
+	data, err := s.client.Get(ctx, roomPrivateZoneKey(roomID, zoneID)).Bytes()
+	if err == redis.Nil {
+		return &model.PrivateZoneState{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetPrivateZoneState: redis GET: %w", err)
+	}
+	var st model.PrivateZoneState
+	if err := json.Unmarshal(data, &st); err != nil {
+		return nil, fmt.Errorf("GetPrivateZoneState: unmarshal: %w", err)
+	}
+	if st.Occupants == nil {
+		st.Occupants = []string{}
+	}
+	if st.Invites == nil {
+		st.Invites = []string{}
+	}
+	return &st, nil
+}
+
+// SetPrivateZoneState บันทึก PrivateZoneState เป็น JSON
+func (s *RedisStore) SetPrivateZoneState(ctx context.Context, roomID, zoneID string, state *model.PrivateZoneState) error {
+	if state == nil {
+		state = &model.PrivateZoneState{}
+	}
+	if state.Occupants == nil {
+		state.Occupants = []string{}
+	}
+	if state.Invites == nil {
+		state.Invites = []string{}
+	}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return fmt.Errorf("SetPrivateZoneState: marshal: %w", err)
+	}
+	if err := s.client.Set(ctx, roomPrivateZoneKey(roomID, zoneID), data, 0).Err(); err != nil {
+		return fmt.Errorf("SetPrivateZoneState: redis SET: %w", err)
+	}
+	return nil
+}
+
+// DeletePrivateZoneState ลบ key ของ private zone
+func (s *RedisStore) DeletePrivateZoneState(ctx context.Context, roomID, zoneID string) error {
+	if err := s.client.Del(ctx, roomPrivateZoneKey(roomID, zoneID)).Err(); err != nil {
+		return fmt.Errorf("DeletePrivateZoneState: redis DEL: %w", err)
+	}
+	return nil
+}
+
+// RemoveConnectionFromPrivateZones ลบ connection ออกจากทุก private zone ของห้อง (SCAN)
+// ถ้า zone ว่างหลังลบ → ลบ key (เคลียร์ invites ด้วย)
+func (s *RedisStore) RemoveConnectionFromPrivateZones(ctx context.Context, roomID, connectionID string) error {
+	pattern := "synctune:room:" + roomID + ":private:*"
+	prefix := "synctune:room:" + roomID + ":private:"
+	var cursor uint64
+	for {
+		batch, next, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return fmt.Errorf("RemoveConnectionFromPrivateZones: scan: %w", err)
+		}
+		for _, key := range batch {
+			zoneID := strings.TrimPrefix(key, prefix)
+			if zoneID == "" || zoneID == key {
+				continue
+			}
+			st, err := s.GetPrivateZoneState(ctx, roomID, zoneID)
+			if err != nil {
+				return err
+			}
+			st.Occupants = filterOutID(st.Occupants, connectionID)
+			st.Invites = filterOutID(st.Invites, connectionID)
+			if len(st.Occupants) == 0 {
+				if err := s.DeletePrivateZoneState(ctx, roomID, zoneID); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := s.SetPrivateZoneState(ctx, roomID, zoneID, st); err != nil {
+				return err
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			break
+		}
+	}
+	return nil
+}
+
+func filterOutID(ids []string, drop string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != drop {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // FlushAll ลบ keys ทั้งหมดของ synctune ออกจาก Redis (SCAN-based)

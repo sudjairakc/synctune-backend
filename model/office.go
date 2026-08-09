@@ -13,3 +13,9 @@ type Presence struct {
 	BubbleID     string  `json:"bubble_id,omitempty"`
 	FollowingID  string  `json:"following_id,omitempty"`
 }
+
+// PrivateZoneState คือ occupants + invites ของ private zone ในห้อง (key = connection_id)
+type PrivateZoneState struct {
+	Occupants []string `json:"occupants"`
+	Invites   []string `json:"invites"`
+}

@@ -206,6 +206,8 @@ func main() {
 			controller.HandleFollowStop(h, client, msg.Payload)
 		case "bell_ring":
 			controller.HandleBellRing(h, client, msg.Payload)
+		case "private_invite":
+			controller.HandlePrivateInvite(h, client, msg.Payload)
 		default:
 			log.Warn().Str("event", msg.Event).Msg("unknown event received")
 		}

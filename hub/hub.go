@@ -176,6 +176,9 @@ func (h *Hub) Unregister(session *melody.Session) {
 		if err := h.store.DeletePresence(ctx, roomID, clientID); err != nil {
 			log.Error().Err(err).Str("room_id", roomID).Str("client_id", clientID).Msg("failed to delete presence on disconnect")
 		}
+		if err := h.store.RemoveConnectionFromPrivateZones(ctx, roomID, clientID); err != nil {
+			log.Error().Err(err).Str("room_id", roomID).Str("client_id", clientID).Msg("failed to clear private zone occupancy on disconnect")
+		}
 		broadcaster.BroadcastPresenceLeave(h, roomID, clientID, client.User.ID)
 		h.clearFollowersOf(roomID, clientID)
 	}

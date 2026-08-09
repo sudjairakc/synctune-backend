@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ type fakeStore struct {
 	settings   model.AppSettings
 	presence   map[string]map[string]model.Presence // roomID → connectionID → Presence
 	channelMsg map[string][]model.ChatMessage       // "roomID\x00channel" → messages (newest first)
+	private    map[string]*model.PrivateZoneState   // "roomID\x00zoneID" → state
 }
 
 func newFakeStore() *fakeStore {
@@ -35,6 +37,7 @@ func newFakeStore() *fakeStore {
 		settings:   model.AppSettings{AllowSkipBroadcast: true}, // default: replay feature เปิด
 		presence:   map[string]map[string]model.Presence{},
 		channelMsg: map[string][]model.ChatMessage{},
+		private:    map[string]*model.PrivateZoneState{},
 	}
 }
 
@@ -155,6 +158,61 @@ func (f *fakeStore) DeletePresence(_ context.Context, roomID, connectionID strin
 		delete(m, connectionID)
 	}
 	return nil
+}
+
+func privateKey(roomID, zoneID string) string { return roomID + "\x00" + zoneID }
+
+func (f *fakeStore) GetPrivateZoneState(_ context.Context, roomID, zoneID string) (*model.PrivateZoneState, error) {
+	st := f.private[privateKey(roomID, zoneID)]
+	if st == nil {
+		return &model.PrivateZoneState{}, nil
+	}
+	out := &model.PrivateZoneState{
+		Occupants: append([]string(nil), st.Occupants...),
+		Invites:   append([]string(nil), st.Invites...),
+	}
+	return out, nil
+}
+
+func (f *fakeStore) SetPrivateZoneState(_ context.Context, roomID, zoneID string, state *model.PrivateZoneState) error {
+	if state == nil {
+		state = &model.PrivateZoneState{}
+	}
+	f.private[privateKey(roomID, zoneID)] = &model.PrivateZoneState{
+		Occupants: append([]string(nil), state.Occupants...),
+		Invites:   append([]string(nil), state.Invites...),
+	}
+	return nil
+}
+
+func (f *fakeStore) DeletePrivateZoneState(_ context.Context, roomID, zoneID string) error {
+	delete(f.private, privateKey(roomID, zoneID))
+	return nil
+}
+
+func (f *fakeStore) RemoveConnectionFromPrivateZones(_ context.Context, roomID, connectionID string) error {
+	prefix := roomID + "\x00"
+	for key, st := range f.private {
+		if !strings.HasPrefix(key, prefix) {
+			continue
+		}
+		st.Occupants = filterFakeID(st.Occupants, connectionID)
+		st.Invites = filterFakeID(st.Invites, connectionID)
+		if len(st.Occupants) == 0 {
+			delete(f.private, key)
+		}
+	}
+	return nil
+}
+
+func filterFakeID(ids []string, drop string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != drop {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func songEnded(t *testing.T, h *hub.Hub, client *hub.Client, queueID string) {

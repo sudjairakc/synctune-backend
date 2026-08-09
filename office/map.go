@@ -83,6 +83,19 @@ func (m *OfficeMap) ZoneAt(x, y float64) (zoneID string, ztype ZoneType) {
 	return "", ZoneOpen
 }
 
+// IsPrivateZone reports whether zoneID is a private zone on this map.
+func (m *OfficeMap) IsPrivateZone(zoneID string) bool {
+	if zoneID == "" {
+		return false
+	}
+	for _, z := range m.zones {
+		if z.id == zoneID && z.typ == ZonePrivate {
+			return true
+		}
+	}
+	return false
+}
+
 func tileCoords(x, y float64) (tx, ty int) {
 	return int(math.Floor(x / TileSize)), int(math.Floor(y / TileSize))
 }
