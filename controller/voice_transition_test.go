@@ -222,3 +222,46 @@ func TestSyncActiveVoice_UsesDeriveActiveVoiceGroup(t *testing.T) {
 		})
 	}
 }
+
+// Mint failure must leave ActiveVoiceGroup empty so a later sync can remint.
+func TestSyncActiveVoice_MintFailThenRetryWhenConfigured(t *testing.T) {
+	// Ensure LiveKit env is unset for the fail path.
+	t.Setenv("LIVEKIT_URL", "")
+	t.Setenv("LIVEKIT_API_KEY", "")
+	t.Setenv("LIVEKIT_API_SECRET", "")
+
+	const roomID = "160003"
+	wantGroup := "st:" + roomID + ":meet:meeting-a"
+
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+	sess, conn, cleanup := dialTestSession(t)
+	defer cleanup()
+	h.Register(sess)
+	id, _ := sess.Get("client_id")
+	client := h.GetClient(id.(string))
+	inbox := collectWSEvents(conn)
+	joinRoom(t, h, client, roomID, "dave")
+	_ = waitCollectedEvent(t, inbox, "room_joined", 2*time.Second, nil)
+
+	client.LastX, client.LastY = 1088, 256
+	client.LastZoneID = "meeting-a"
+
+	SyncActiveVoice(h, client)
+	_ = waitVoiceCredentials(t, inbox, "", 2*time.Second)
+	if client.ActiveVoiceGroup != "" {
+		t.Fatalf("after mint fail ActiveVoiceGroup = %q, want empty (so retry can remint)", client.ActiveVoiceGroup)
+	}
+
+	// Configure LiveKit and sync again — must emit real credentials.
+	withLiveKitEnv(t)
+	SyncActiveVoice(h, client)
+	payload := waitVoiceCredentials(t, inbox, wantGroup, 2*time.Second)
+	if client.ActiveVoiceGroup != wantGroup {
+		t.Fatalf("after retry ActiveVoiceGroup = %q, want %q", client.ActiveVoiceGroup, wantGroup)
+	}
+	if token, _ := payload["token"].(string); token == "" {
+		t.Fatal("expected non-empty token after remint")
+	}
+}

@@ -73,21 +73,25 @@ func BuildVoiceCredentials(cfg *config.Config, groupID, connectionID string) (Vo
 	}, nil
 }
 
-// EmitVoiceCredentials sends voice_credentials to the client.
-// When LiveKit is not configured or mint fails, emits empty credentials (clear).
-func EmitVoiceCredentials(h *hub.Hub, client *hub.Client, cfg *config.Config, groupID string) {
+// EmitVoiceCredentials sends voice_credentials to the client and returns the
+// group_id that was actually emitted (empty when clearing or mint fails).
+func EmitVoiceCredentials(h *hub.Hub, client *hub.Client, cfg *config.Config, groupID string) string {
 	creds, err := BuildVoiceCredentials(cfg, groupID, client.ID)
 	if err != nil {
 		log.Warn().Err(err).Str("connection_id", client.ID).Str("group_id", groupID).
 			Msg("EmitVoiceCredentials: mint failed; clearing voice")
 		h.SendToSession(client.Conn, "voice_credentials", VoiceCredentials{})
-		return
+		return ""
 	}
 	h.SendToSession(client.Conn, "voice_credentials", creds)
+	return creds.GroupID
 }
 
 // SyncActiveVoice recomputes DeriveActiveVoiceGroup and emits credentials only when
-// the group changes. Switching groups emits a single payload with the new group_id
+// the desired group differs from the last successfully emitted group.
+// ActiveVoiceGroup tracks credentials actually sent (empty after clear/mint failure)
+// so a later sync can remint when LiveKit becomes available.
+// Switching groups emits a single payload with the new group_id
 // (client must dispose the previous LiveKit session before joining — never two groups).
 func SyncActiveVoice(h *hub.Hub, client *hub.Client) {
 	if h == nil || client == nil || client.RoomID == "" {
@@ -99,8 +103,7 @@ func SyncActiveVoice(h *hub.Hub, client *hub.Client) {
 	if groupID == client.ActiveVoiceGroup {
 		return
 	}
-	EmitVoiceCredentials(h, client, config.Load(), groupID)
-	client.ActiveVoiceGroup = groupID
+	client.ActiveVoiceGroup = EmitVoiceCredentials(h, client, config.Load(), groupID)
 }
 
 // ClearVoiceOnDisconnect emits clear credentials when the connection had an active group.
@@ -108,8 +111,7 @@ func ClearVoiceOnDisconnect(h *hub.Hub, client *hub.Client) {
 	if h == nil || client == nil || client.ActiveVoiceGroup == "" {
 		return
 	}
-	EmitVoiceCredentials(h, client, config.Load(), "")
-	client.ActiveVoiceGroup = ""
+	client.ActiveVoiceGroup = EmitVoiceCredentials(h, client, config.Load(), "")
 }
 
 // HandleVoiceTokenRequest remints credentials for the client's current active group.
@@ -122,6 +124,5 @@ func HandleVoiceTokenRequest(h *hub.Hub, client *hub.Client, _ json.RawMessage) 
 	m := office.DefaultMap()
 	zoneID, zoneType := m.ZoneAt(client.LastX, client.LastY)
 	groupID := office.DeriveActiveVoiceGroup(client.RoomID, client.BubbleID, zoneID, zoneType)
-	EmitVoiceCredentials(h, client, config.Load(), groupID)
-	client.ActiveVoiceGroup = groupID
+	client.ActiveVoiceGroup = EmitVoiceCredentials(h, client, config.Load(), groupID)
 }
