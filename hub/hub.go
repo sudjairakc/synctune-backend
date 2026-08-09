@@ -39,6 +39,7 @@ type Client struct {
 	LastZoneID     string
 	LastDir        string
 	FollowingID    string // connection_id ที่กำลัง follow; ว่าง = ไม่ follow
+	BubbleID       string // bubble ที่เป็นสมาชิก; ว่าง = ไม่อยู่ใน bubble
 }
 
 // Hub จัดการ Connection Pool และ Broadcast
@@ -179,6 +180,7 @@ func (h *Hub) Unregister(session *melody.Session) {
 		if err := h.store.RemoveConnectionFromPrivateZones(ctx, roomID, clientID); err != nil {
 			log.Error().Err(err).Str("room_id", roomID).Str("client_id", clientID).Msg("failed to clear private zone occupancy on disconnect")
 		}
+		h.clearBubblesOnDisconnect(roomID, clientID)
 		broadcaster.BroadcastPresenceLeave(h, roomID, clientID, client.User.ID)
 		h.clearFollowersOf(roomID, clientID)
 	}
@@ -277,12 +279,27 @@ func (h *Hub) clearFollowersOf(roomID, targetConnectionID string) {
 			Y:            c.LastY,
 			Dir:          c.LastDir,
 			ZoneID:       c.LastZoneID,
+			BubbleID:     c.BubbleID,
 			FollowingID:  "",
 		}
 		if err := h.store.SetPresence(ctx, roomID, p); err != nil {
 			log.Error().Err(err).Str("room_id", roomID).Str("client_id", c.ID).Msg("failed to clear following on target disconnect")
 		}
 		broadcaster.BroadcastFollowUpdated(h, roomID, c.ID, "")
+	}
+}
+
+// clearBubblesOnDisconnect ลบ connection ออกจากทุก bubble; ว่าง → ลบ bubble + chat history
+// แล้ว broadcast bubble_updated ให้ห้อง
+func (h *Hub) clearBubblesOnDisconnect(roomID, connectionID string) {
+	ctx := context.Background()
+	updated, err := h.store.RemoveConnectionFromBubbles(ctx, roomID, connectionID)
+	if err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Str("client_id", connectionID).Msg("failed to clear bubble membership on disconnect")
+		return
+	}
+	for _, b := range updated {
+		broadcaster.BroadcastBubbleUpdated(h, roomID, b.ID, b.Members)
 	}
 }
 

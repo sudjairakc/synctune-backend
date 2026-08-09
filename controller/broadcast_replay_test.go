@@ -25,6 +25,7 @@ type fakeStore struct {
 	presence   map[string]map[string]model.Presence // roomID → connectionID → Presence
 	channelMsg map[string][]model.ChatMessage       // "roomID\x00channel" → messages (newest first)
 	private    map[string]*model.PrivateZoneState   // "roomID\x00zoneID" → state
+	bubbles    map[string]map[string]*model.Bubble  // roomID → bubbleID → Bubble
 }
 
 func newFakeStore() *fakeStore {
@@ -38,6 +39,7 @@ func newFakeStore() *fakeStore {
 		presence:   map[string]map[string]model.Presence{},
 		channelMsg: map[string][]model.ChatMessage{},
 		private:    map[string]*model.PrivateZoneState{},
+		bubbles:    map[string]map[string]*model.Bubble{},
 	}
 }
 
@@ -213,6 +215,100 @@ func filterFakeID(ids []string, drop string) []string {
 		}
 	}
 	return out
+}
+
+func cloneBubble(b *model.Bubble) *model.Bubble {
+	if b == nil {
+		return nil
+	}
+	return &model.Bubble{
+		ID:      b.ID,
+		Members: append([]string(nil), b.Members...),
+		Invites: append([]string(nil), b.Invites...),
+	}
+}
+
+func (f *fakeStore) GetBubble(_ context.Context, roomID, bubbleID string) (*model.Bubble, error) {
+	m := f.bubbles[roomID]
+	if m == nil {
+		return nil, nil
+	}
+	return cloneBubble(m[bubbleID]), nil
+}
+
+func (f *fakeStore) SetBubble(_ context.Context, roomID string, b *model.Bubble) error {
+	if b == nil || b.ID == "" {
+		return nil
+	}
+	if f.bubbles[roomID] == nil {
+		f.bubbles[roomID] = map[string]*model.Bubble{}
+	}
+	f.bubbles[roomID][b.ID] = cloneBubble(b)
+	return nil
+}
+
+func (f *fakeStore) DeleteBubble(_ context.Context, roomID, bubbleID string) error {
+	if m := f.bubbles[roomID]; m != nil {
+		delete(m, bubbleID)
+	}
+	delete(f.channelMsg, roomID+"\x00"+"bubble:"+bubbleID)
+	return nil
+}
+
+func (f *fakeStore) ListBubbles(_ context.Context, roomID string) ([]model.Bubble, error) {
+	m := f.bubbles[roomID]
+	out := make([]model.Bubble, 0, len(m))
+	for _, b := range m {
+		out = append(out, *cloneBubble(b))
+	}
+	return out, nil
+}
+
+func (f *fakeStore) FindBubbleByMember(_ context.Context, roomID, connectionID string) (*model.Bubble, error) {
+	for _, b := range f.bubbles[roomID] {
+		for _, m := range b.Members {
+			if m == connectionID {
+				return cloneBubble(b), nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func (f *fakeStore) RemoveConnectionFromBubbles(_ context.Context, roomID, connectionID string) ([]model.Bubble, error) {
+	m := f.bubbles[roomID]
+	if m == nil {
+		return nil, nil
+	}
+	var updated []model.Bubble
+	for id, b := range m {
+		wasMember := false
+		for _, mem := range b.Members {
+			if mem == connectionID {
+				wasMember = true
+				break
+			}
+		}
+		newMembers := filterFakeID(b.Members, connectionID)
+		newInvites := filterFakeID(b.Invites, connectionID)
+		if len(newMembers) == len(b.Members) && len(newInvites) == len(b.Invites) {
+			continue
+		}
+		b.Members = newMembers
+		b.Invites = newInvites
+		if len(b.Members) == 0 {
+			delete(m, id)
+			delete(f.channelMsg, roomID+"\x00"+"bubble:"+id)
+			if wasMember {
+				updated = append(updated, model.Bubble{ID: id, Members: []string{}, Invites: []string{}})
+			}
+			continue
+		}
+		if wasMember {
+			updated = append(updated, *cloneBubble(b))
+		}
+	}
+	return updated, nil
 }
 
 func songEnded(t *testing.T, h *hub.Hub, client *hub.Client, queueID string) {

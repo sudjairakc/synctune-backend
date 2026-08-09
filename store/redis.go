@@ -57,6 +57,11 @@ func roomPrivateZoneKey(roomID, zoneID string) string {
 	return "synctune:room:" + roomID + ":private:" + zoneID
 }
 
+// roomBubblesKey คืน Redis key สำหรับ HASH ของ bubbles ในห้อง (field = bubble_id)
+func roomBubblesKey(roomID string) string {
+	return "synctune:room:" + roomID + ":bubbles"
+}
+
 // Store กำหนด Interface สำหรับการเข้าถึง Storage
 type Store interface {
 	GetState(ctx context.Context, roomID string) (*model.PlaylistState, error)
@@ -121,6 +126,19 @@ type Store interface {
 	DeletePrivateZoneState(ctx context.Context, roomID, zoneID string) error
 	// RemoveConnectionFromPrivateZones ลบ connection ออกจากทุก private zone ของห้อง (disconnect)
 	RemoveConnectionFromPrivateZones(ctx context.Context, roomID, connectionID string) error
+	// GetBubble โหลด Bubble ตาม id — คืน nil,nil ถ้าไม่มี
+	GetBubble(ctx context.Context, roomID, bubbleID string) (*model.Bubble, error)
+	// SetBubble บันทึก Bubble ใน HASH synctune:room:{id}:bubbles
+	SetBubble(ctx context.Context, roomID string, b *model.Bubble) error
+	// DeleteBubble ลบ Bubble และ channel history key bubble:{id}
+	DeleteBubble(ctx context.Context, roomID, bubbleID string) error
+	// ListBubbles คืน Bubble ทั้งหมดในห้อง
+	ListBubbles(ctx context.Context, roomID string) ([]model.Bubble, error)
+	// FindBubbleByMember คืน Bubble ที่ connection เป็นสมาชิก — nil ถ้าไม่มี
+	FindBubbleByMember(ctx context.Context, roomID, connectionID string) (*model.Bubble, error)
+	// RemoveConnectionFromBubbles ลบ connection จากสมาชิก/invite ทุก bubble;
+	// ถ้า members ว่าง → ลบ bubble + chat history; คืน bubbles ที่เปลี่ยน (members อาจว่าง)
+	RemoveConnectionFromBubbles(ctx context.Context, roomID, connectionID string) ([]model.Bubble, error)
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -530,6 +548,7 @@ func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 		roomSoundPadHistoryKey(roomID),
 		roomLastEmptiedKey(roomID),
 		roomPresenceKey(roomID),
+		roomBubblesKey(roomID),
 	}
 	for _, pattern := range []string{
 		"synctune:room:" + roomID + ":chat:*",
@@ -750,6 +769,138 @@ func filterOutID(ids []string, drop string) []string {
 		}
 	}
 	return out
+}
+
+func normalizeBubble(b *model.Bubble) *model.Bubble {
+	if b == nil {
+		return &model.Bubble{Members: []string{}, Invites: []string{}}
+	}
+	if b.Members == nil {
+		b.Members = []string{}
+	}
+	if b.Invites == nil {
+		b.Invites = []string{}
+	}
+	return b
+}
+
+// GetBubble โหลด Bubble จาก HASH — คืน nil,nil ถ้าไม่มี field
+func (s *RedisStore) GetBubble(ctx context.Context, roomID, bubbleID string) (*model.Bubble, error) {
+	data, err := s.client.HGet(ctx, roomBubblesKey(roomID), bubbleID).Bytes()
+	if err == redis.Nil {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("GetBubble: redis HGET: %w", err)
+	}
+	var b model.Bubble
+	if err := json.Unmarshal(data, &b); err != nil {
+		return nil, fmt.Errorf("GetBubble: unmarshal: %w", err)
+	}
+	return normalizeBubble(&b), nil
+}
+
+// SetBubble บันทึก Bubble เป็น JSON ใน HASH field = bubble id
+func (s *RedisStore) SetBubble(ctx context.Context, roomID string, b *model.Bubble) error {
+	b = normalizeBubble(b)
+	if b.ID == "" {
+		return fmt.Errorf("SetBubble: empty bubble id")
+	}
+	data, err := json.Marshal(b)
+	if err != nil {
+		return fmt.Errorf("SetBubble: marshal: %w", err)
+	}
+	if err := s.client.HSet(ctx, roomBubblesKey(roomID), b.ID, data).Err(); err != nil {
+		return fmt.Errorf("SetBubble: redis HSET: %w", err)
+	}
+	return nil
+}
+
+// DeleteBubble ลบ field จาก bubbles HASH และลบ channel chat bubble:{id}
+func (s *RedisStore) DeleteBubble(ctx context.Context, roomID, bubbleID string) error {
+	pipe := s.client.Pipeline()
+	pipe.HDel(ctx, roomBubblesKey(roomID), bubbleID)
+	pipe.Del(ctx, roomChannelChatKey(roomID, "bubble:"+bubbleID))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("DeleteBubble: %w", err)
+	}
+	return nil
+}
+
+// ListBubbles คืน Bubble ทั้งหมดจาก HASH ของห้อง
+func (s *RedisStore) ListBubbles(ctx context.Context, roomID string) ([]model.Bubble, error) {
+	vals, err := s.client.HGetAll(ctx, roomBubblesKey(roomID)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("ListBubbles: redis HGETALL: %w", err)
+	}
+	out := make([]model.Bubble, 0, len(vals))
+	for _, raw := range vals {
+		var b model.Bubble
+		if err := json.Unmarshal([]byte(raw), &b); err != nil {
+			continue
+		}
+		out = append(out, *normalizeBubble(&b))
+	}
+	return out, nil
+}
+
+// FindBubbleByMember คืน Bubble แรกที่ connection เป็นสมาชิก
+func (s *RedisStore) FindBubbleByMember(ctx context.Context, roomID, connectionID string) (*model.Bubble, error) {
+	bubbles, err := s.ListBubbles(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bubbles {
+		for _, m := range bubbles[i].Members {
+			if m == connectionID {
+				b := bubbles[i]
+				return &b, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// RemoveConnectionFromBubbles ลบ connection จากทุก bubble; ว่าง → DeleteBubble
+// คืนเฉพาะ bubbles ที่สมาชิกเปลี่ยน (รวมที่ถูกลบ — Members ว่าง)
+func (s *RedisStore) RemoveConnectionFromBubbles(ctx context.Context, roomID, connectionID string) ([]model.Bubble, error) {
+	bubbles, err := s.ListBubbles(ctx, roomID)
+	if err != nil {
+		return nil, err
+	}
+	var updated []model.Bubble
+	for _, b := range bubbles {
+		wasMember := false
+		for _, m := range b.Members {
+			if m == connectionID {
+				wasMember = true
+				break
+			}
+		}
+		newMembers := filterOutID(b.Members, connectionID)
+		newInvites := filterOutID(b.Invites, connectionID)
+		if len(newMembers) == len(b.Members) && len(newInvites) == len(b.Invites) {
+			continue
+		}
+		b.Members = newMembers
+		b.Invites = newInvites
+		if len(b.Members) == 0 {
+			if err := s.DeleteBubble(ctx, roomID, b.ID); err != nil {
+				return nil, err
+			}
+			if wasMember {
+				updated = append(updated, model.Bubble{ID: b.ID, Members: []string{}, Invites: []string{}})
+			}
+			continue
+		}
+		if err := s.SetBubble(ctx, roomID, &b); err != nil {
+			return nil, err
+		}
+		if wasMember {
+			updated = append(updated, b)
+		}
+	}
+	return updated, nil
 }
 
 // FlushAll ลบ keys ทั้งหมดของ synctune ออกจาก Redis (SCAN-based)

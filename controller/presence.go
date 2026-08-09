@@ -83,6 +83,7 @@ func HandlePresenceUpdate(h *hub.Hub, client *hub.Client, rawPayload json.RawMes
 		Y:            result.Y,
 		Dir:          dir,
 		ZoneID:       result.ZoneID,
+		BubbleID:     client.BubbleID,
 		FollowingID:  client.FollowingID,
 	}
 

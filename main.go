@@ -208,6 +208,12 @@ func main() {
 			controller.HandleBellRing(h, client, msg.Payload)
 		case "private_invite":
 			controller.HandlePrivateInvite(h, client, msg.Payload)
+		case "bubble_invite":
+			controller.HandleBubbleInvite(h, client, msg.Payload)
+		case "bubble_accept":
+			controller.HandleBubbleAccept(h, client, msg.Payload)
+		case "bubble_leave":
+			controller.HandleBubbleLeave(h, client, msg.Payload)
 		default:
 			log.Warn().Str("event", msg.Event).Msg("unknown event received")
 		}

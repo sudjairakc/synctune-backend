@@ -19,3 +19,10 @@ type PrivateZoneState struct {
 	Occupants []string `json:"occupants"`
 	Invites   []string `json:"invites"`
 }
+
+// Bubble คือกลุ่มสมาชิกแบบ ownerless — มีชีวิตตราบใดที่ len(Members) > 0
+type Bubble struct {
+	ID      string   `json:"id"`
+	Members []string `json:"members"` // connection IDs
+	Invites []string `json:"invites"` // pending invite connection IDs
+}

@@ -27,6 +27,7 @@ func presenceFromClient(client *hub.Client) model.Presence {
 		Y:            client.LastY,
 		Dir:          client.LastDir,
 		ZoneID:       client.LastZoneID,
+		BubbleID:     client.BubbleID,
 		FollowingID:  client.FollowingID,
 	}
 }

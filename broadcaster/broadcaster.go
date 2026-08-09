@@ -186,6 +186,23 @@ func BroadcastFollowUpdated(h hubInterface, roomID, connectionID, followingID st
 	})
 }
 
+// bubbleUpdatedPayload คือ payload ของ event bubble_updated
+type bubbleUpdatedPayload struct {
+	BubbleID string   `json:"bubble_id"`
+	Members  []string `json:"members"`
+}
+
+// BroadcastBubbleUpdated broadcast event "bubble_updated" ไปทั้งห้อง
+func BroadcastBubbleUpdated(h hubInterface, roomID, bubbleID string, members []string) {
+	if members == nil {
+		members = []string{}
+	}
+	h.BroadcastToRoom(roomID, "bubble_updated", bubbleUpdatedPayload{
+		BubbleID: bubbleID,
+		Members:  members,
+	})
+}
+
 // BroadcastPresenceLeave broadcast event "presence_leave" ไปทั้งห้อง
 func BroadcastPresenceLeave(h hubInterface, roomID, connectionID, userID string) {
 	h.BroadcastToRoom(roomID, "presence_leave", presenceLeavePayload{
