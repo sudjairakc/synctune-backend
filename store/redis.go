@@ -23,8 +23,14 @@ func roomStateKey(roomID string) string { return "synctune:room:" + roomID + ":s
 // roomHistoryKey คืน Redis key สำหรับ history ของห้องนั้น
 func roomHistoryKey(roomID string) string { return "synctune:room:" + roomID + ":history" }
 
-// roomChatKey คืน Redis key สำหรับ chat ของห้องนั้น
+// roomChatKey คืน Redis key สำหรับ chat ของห้องนั้น (room-wide / send_message)
 func roomChatKey(roomID string) string { return "synctune:room:" + roomID + ":chat" }
+
+// roomChannelChatKey คืน Redis key สำหรับ channel chat (meeting / dm / bubble)
+// channel เช่น meeting:meeting-a, dm:idA:idB, bubble:bid
+func roomChannelChatKey(roomID, channel string) string {
+	return "synctune:room:" + roomID + ":chat:" + channel
+}
 
 // roomPinsKey คืน Redis key สำหรับ pinned messages ของห้องนั้น
 func roomPinsKey(roomID string) string { return "synctune:room:" + roomID + ":pins" }
@@ -54,6 +60,8 @@ type Store interface {
 	GetHistory(ctx context.Context, roomID string) ([]model.HistorySong, error)
 	PushChatMessage(ctx context.Context, roomID string, msg model.ChatMessage) error
 	GetChatHistory(ctx context.Context, roomID string) ([]model.ChatMessage, error)
+	PushChannelMessage(ctx context.Context, roomID, channel string, msg model.ChatMessage) error
+	GetChannelHistory(ctx context.Context, roomID, channel string, limit int) ([]model.ChatMessage, error)
 	GetChatMessageByID(ctx context.Context, roomID, msgID string) (*model.ChatMessage, error)
 	DeleteChatMessage(ctx context.Context, roomID, msgID string) error
 	ToggleChatReaction(ctx context.Context, roomID, msgID, emoji, userID string) (map[string][]string, error)
@@ -236,6 +244,44 @@ func (s *RedisStore) GetChatHistory(ctx context.Context, roomID string) ([]model
 	items, err := s.client.LRange(ctx, roomChatKey(roomID), 0, maxChat-1).Result()
 	if err != nil {
 		return nil, fmt.Errorf("GetChatHistory: redis LRANGE: %w", err)
+	}
+	msgs := make([]model.ChatMessage, 0, len(items))
+	for _, item := range items {
+		var msg model.ChatMessage
+		if err := json.Unmarshal([]byte(item), &msg); err != nil {
+			continue
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, nil
+}
+
+// PushChannelMessage เพิ่ม ChatMessage ลง channel history (LPUSH + LTRIM, newest first)
+func (s *RedisStore) PushChannelMessage(ctx context.Context, roomID, channel string, msg model.ChatMessage) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("PushChannelMessage: marshal: %w", err)
+	}
+	key := roomChannelChatKey(roomID, channel)
+	_, err = s.client.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.LPush(ctx, key, data)
+		pipe.LTrim(ctx, key, 0, maxChat-1)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("PushChannelMessage: pipeline: %w", err)
+	}
+	return nil
+}
+
+// GetChannelHistory ดึง channel chat history จาก Redis (newest first, จำกัดด้วย limit)
+func (s *RedisStore) GetChannelHistory(ctx context.Context, roomID, channel string, limit int) ([]model.ChatMessage, error) {
+	if limit <= 0 || limit > maxChat {
+		limit = maxChat
+	}
+	items, err := s.client.LRange(ctx, roomChannelChatKey(roomID, channel), 0, int64(limit-1)).Result()
+	if err != nil {
+		return nil, fmt.Errorf("GetChannelHistory: redis LRANGE: %w", err)
 	}
 	msgs := make([]model.ChatMessage, 0, len(items))
 	for _, item := range items {
@@ -458,7 +504,7 @@ func (s *RedisStore) GetSoundPadHistory(ctx context.Context, roomID string) ([]m
 	return events, nil
 }
 
-// DeleteRoom ลบ Redis keys ทั้งหมดของห้องนั้น
+// DeleteRoom ลบ Redis keys ทั้งหมดของห้องนั้น รวม channel chat keys (SCAN chat:*)
 func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 	keys := []string{
 		roomStateKey(roomID),
@@ -469,6 +515,19 @@ func (s *RedisStore) DeleteRoom(ctx context.Context, roomID string) error {
 		roomSoundPadHistoryKey(roomID),
 		roomLastEmptiedKey(roomID),
 		roomPresenceKey(roomID),
+	}
+	var cursor uint64
+	pattern := "synctune:room:" + roomID + ":chat:*"
+	for {
+		batch, next, err := s.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return fmt.Errorf("DeleteRoom: scan chat: %w", err)
+		}
+		keys = append(keys, batch...)
+		cursor = next
+		if cursor == 0 {
+			break
+		}
 	}
 	if err := s.client.Del(ctx, keys...).Err(); err != nil {
 		return fmt.Errorf("DeleteRoom: %w", err)

@@ -91,6 +91,14 @@ func (f *fakeStore) GetChatHistory(_ context.Context, _ string) ([]model.ChatMes
 	return nil, nil
 }
 
+func (f *fakeStore) PushChannelMessage(_ context.Context, _, _ string, _ model.ChatMessage) error {
+	return nil
+}
+
+func (f *fakeStore) GetChannelHistory(_ context.Context, _, _ string, _ int) ([]model.ChatMessage, error) {
+	return nil, nil
+}
+
 func (f *fakeStore) GetSoundPad(_ context.Context, _ string) ([]*model.SoundPadSlot, error) {
 	return make([]*model.SoundPadSlot, model.SoundPadSize), nil
 }
