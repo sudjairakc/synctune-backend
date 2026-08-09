@@ -112,6 +112,37 @@ func HandlePresenceUpdate(h *hub.Hub, client *hub.Client, rawPayload json.RawMes
 	SyncActiveVoice(h, client)
 }
 
+// reconcileLivePresence returns presence for currently connected clients only.
+// Stale Redis HASH fields (missed disconnect / crash / deploy) are deleted and
+// presence_leave is broadcast so peers drop ghost avatars immediately.
+func reconcileLivePresence(h *hub.Hub, roomID string) []model.Presence {
+	ctx := context.Background()
+	all, err := h.Store().GetAllPresence(ctx, roomID)
+	if err != nil {
+		log.Error().Err(err).Str("room_id", roomID).Msg("reconcileLivePresence: GetAllPresence failed")
+		return []model.Presence{}
+	}
+	live := make(map[string]struct{}, len(all))
+	for _, c := range h.ClientsInRoom(roomID) {
+		if c != nil && c.ID != "" {
+			live[c.ID] = struct{}{}
+		}
+	}
+	out := make([]model.Presence, 0, len(live))
+	for _, p := range all {
+		if _, ok := live[p.ConnectionID]; ok {
+			out = append(out, p)
+			continue
+		}
+		if err := h.Store().DeletePresence(ctx, roomID, p.ConnectionID); err != nil {
+			log.Error().Err(err).Str("room_id", roomID).Str("connection_id", p.ConnectionID).Msg("reconcileLivePresence: DeletePresence failed")
+		}
+		broadcaster.BroadcastPresenceLeave(h, roomID, p.ConnectionID, p.UserID)
+		log.Info().Str("room_id", roomID).Str("connection_id", p.ConnectionID).Str("username", p.Username).Msg("purged stale presence ghost")
+	}
+	return out
+}
+
 // spawnPresence สร้าง Presence ที่จุด spawn และบันทึกลง store + client memory
 func spawnPresence(h *hub.Hub, client *hub.Client, roomID string) (model.Presence, error) {
 	return placePresence(h, client, roomID, office.SpawnX, office.SpawnY, "down")

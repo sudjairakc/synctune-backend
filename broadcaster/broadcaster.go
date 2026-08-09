@@ -23,6 +23,7 @@ type soundPadPlayPayload struct {
 // hubInterface ป้องกัน Circular import ระหว่าง hub และ broadcaster
 type hubInterface interface {
 	BroadcastToRoom(roomID string, event string, payload interface{})
+	BroadcastToRoomExcept(roomID string, excludeID string, event string, payload interface{})
 	SendToSession(session *melody.Session, event string, payload interface{})
 }
 
@@ -179,8 +180,9 @@ type followUpdatedPayload struct {
 }
 
 // BroadcastPresenceUpdate broadcast event "presence_update" ไปทั้งห้อง
+// ยกเว้นเจ้าของ presence — FE ใช้ local prediction; self-echo ทำให้เกิด avatar clone
 func BroadcastPresenceUpdate(h hubInterface, roomID string, p model.Presence) {
-	h.BroadcastToRoom(roomID, "presence_update", p)
+	h.BroadcastToRoomExcept(roomID, p.ConnectionID, "presence_update", p)
 }
 
 // BroadcastFollowUpdated broadcast event "follow_updated" ไปทั้งห้อง

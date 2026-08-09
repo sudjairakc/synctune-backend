@@ -61,9 +61,10 @@ func (h *Hub) VoteMutex(roomID string) *sync.Mutex {
 }
 
 type broadcastMsg struct {
-	roomID  string
-	event   string
-	payload interface{}
+	roomID    string
+	event     string
+	payload   interface{}
+	excludeID string // optional: skip this connection_id (e.g. presence self-echo)
 }
 
 // NewHub สร้าง Hub ใหม่พร้อม Store ที่ใช้เก็บ PlaylistState
@@ -116,6 +117,9 @@ func (h *Hub) Run() {
 		log.Debug().Str("event", msg.event).Str("room_id", msg.roomID).Int("clients", len(clients)).Msg("broadcasting to room")
 		var wg sync.WaitGroup
 		for _, c := range clients {
+			if msg.excludeID != "" && c.ID == msg.excludeID {
+				continue
+			}
 			wg.Add(1)
 			go func(cl *Client) {
 				defer wg.Done()
@@ -369,12 +373,17 @@ func (h *Hub) HandleMessage(session *melody.Session, msg []byte) {
 
 // BroadcastToRoom ส่ง Event ไปทุก Client ในห้องนั้น ผ่าน Channel
 func (h *Hub) BroadcastToRoom(roomID, event string, payload interface{}) {
+	h.BroadcastToRoomExcept(roomID, "", event, payload)
+}
+
+// BroadcastToRoomExcept like BroadcastToRoom but skips excludeID when non-empty.
+func (h *Hub) BroadcastToRoomExcept(roomID, excludeID, event string, payload interface{}) {
 	h.mu.RLock()
 	n := len(h.rooms[roomID])
 	h.mu.RUnlock()
-	log.Debug().Str("event", event).Str("room_id", roomID).Int("clients", n).Msg("broadcast queued")
+	log.Debug().Str("event", event).Str("room_id", roomID).Int("clients", n).Str("exclude", excludeID).Msg("broadcast queued")
 	select {
-	case h.broadcastCh <- broadcastMsg{roomID: roomID, event: event, payload: payload}:
+	case h.broadcastCh <- broadcastMsg{roomID: roomID, event: event, payload: payload, excludeID: excludeID}:
 	default:
 		log.Warn().Str("event", event).Str("room_id", roomID).Msg("broadcast channel full, message dropped")
 	}

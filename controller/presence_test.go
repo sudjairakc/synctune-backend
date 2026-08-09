@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
 	"github.com/synctune/backend/hub"
+	"github.com/synctune/backend/model"
 	"github.com/synctune/backend/office"
 )
 
@@ -297,6 +298,92 @@ func TestPresenceLeaveOnDisconnect(t *testing.T) {
 	for _, p := range got {
 		if p.ConnectionID == aliceID {
 			t.Fatal("alice presence should be deleted on disconnect")
+		}
+	}
+}
+
+func TestJoinPurgesStalePresenceGhost(t *testing.T) {
+	const roomID = "100006"
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+
+	// Orphan Redis presence (e.g. crash / deploy without disconnect cleanup)
+	ghostID := "dead-conn-ghost"
+	if err := fs.SetPresence(context.Background(), roomID, model.Presence{
+		ConnectionID: ghostID,
+		UserID:       ghostID,
+		Username:     "alice",
+		X:            office.SpawnX,
+		Y:            office.SpawnY,
+		Dir:          "down",
+	}); err != nil {
+		t.Fatalf("seed ghost: %v", err)
+	}
+
+	_, _, cleanupA := registerJoined(t, h, roomID, "alice")
+	defer cleanupA()
+	_, _, cleanupB := registerJoined(t, h, roomID, "bob")
+	defer cleanupB()
+
+	got, err := fs.GetAllPresence(context.Background(), roomID)
+	if err != nil {
+		t.Fatalf("GetAllPresence: %v", err)
+	}
+	for _, p := range got {
+		if p.ConnectionID == ghostID {
+			t.Fatal("stale ghost presence should be purged on join reconcile")
+		}
+	}
+	if len(got) != 2 {
+		t.Fatalf("presence count = %d, want 2 live clients", len(got))
+	}
+}
+
+func TestPresenceUpdateNotEchoedToSender(t *testing.T) {
+	const roomID = "100007"
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+
+	sessA, connA, cleanupA := dialTestSession(t)
+	defer cleanupA()
+	h.Register(sessA)
+	idA, _ := sessA.Get("client_id")
+	alice := h.GetClient(idA.(string))
+	inboxA := collectWSEvents(connA)
+	joinRoom(t, h, alice, roomID, "alice")
+	_ = waitCollectedEvent(t, inboxA, "room_joined", 2*time.Second, nil)
+
+	_, inboxB, cleanupB := registerJoined(t, h, roomID, "bob")
+	defer cleanupB()
+
+	alice.LastPresenceAt = time.Now().Add(-time.Second)
+	targetX := office.SpawnX + 80
+	payload, _ := json.Marshal(presenceUpdatePayload{X: targetX, Y: office.SpawnY, Dir: "right"})
+	HandlePresenceUpdate(h, alice, payload)
+
+	_ = waitCollectedEvent(t, inboxB, "presence_update", 2*time.Second, func(p map[string]interface{}) bool {
+		return p["connection_id"] == alice.ID
+	})
+
+	// Drain briefly — sender must not receive their own presence_update
+	deadline := time.After(300 * time.Millisecond)
+	for {
+		select {
+		case <-deadline:
+			return
+		case msg, ok := <-inboxA:
+			if !ok {
+				return
+			}
+			if msg["event"] != "presence_update" {
+				continue
+			}
+			p, _ := msg["payload"].(map[string]interface{})
+			if p["connection_id"] == alice.ID {
+				t.Fatal("sender must not receive presence_update self-echo")
+			}
 		}
 	}
 }

@@ -135,10 +135,8 @@ func HandleJoin(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		h.SendToSession(client.Conn, "error", model.WSError{Code: "SERVER_ERROR", Message: "เกิดข้อผิดพลาดภายใน"})
 		return
 	}
-	presenceState, err := h.Store().GetAllPresence(ctx, roomID)
-	if err != nil {
-		presenceState = []model.Presence{}
-	}
+	// Drop Redis ghosts (dead connection_ids) so rejoins / deploys don't leave clones
+	presenceState := reconcileLivePresence(h, roomID)
 
 	log.Info().Str("event", "join").Str("user_id", user.ID).Str("username", user.Username).Str("room_id", roomID).Msg("user joined room")
 
