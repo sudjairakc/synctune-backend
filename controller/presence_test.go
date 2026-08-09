@@ -135,6 +135,83 @@ func TestPresenceUpdateMoves(t *testing.T) {
 	}
 }
 
+// collectWSEvents reads conn until closed; returns a channel of decoded messages.
+func collectWSEvents(conn *websocket.Conn) <-chan map[string]interface{} {
+	ch := make(chan map[string]interface{}, 32)
+	go func() {
+		defer close(ch)
+		for {
+			_, data, err := conn.ReadMessage()
+			if err != nil {
+				return
+			}
+			var msg map[string]interface{}
+			if err := json.Unmarshal(data, &msg); err != nil {
+				continue
+			}
+			ch <- msg
+		}
+	}()
+	return ch
+}
+
+func waitCollectedEvent(t *testing.T, ch <-chan map[string]interface{}, event string, timeout time.Duration, match func(map[string]interface{}) bool) map[string]interface{} {
+	t.Helper()
+	deadline := time.After(timeout)
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for event %q", event)
+		case msg, ok := <-ch:
+			if !ok {
+				t.Fatalf("ws closed while waiting for event %q", event)
+			}
+			if msg["event"] != event {
+				continue
+			}
+			payload, _ := msg["payload"].(map[string]interface{})
+			if match != nil && !match(payload) {
+				continue
+			}
+			return payload
+		}
+	}
+}
+
+func TestJoinBroadcastsSpawnPresenceToPeers(t *testing.T) {
+	const roomID = "100004"
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+
+	sessA, connA, cleanupA := dialTestSession(t)
+	defer cleanupA()
+	h.Register(sessA)
+	clientAID, _ := sessA.Get("client_id")
+	clientA := h.GetClient(clientAID.(string))
+	inboxA := collectWSEvents(connA)
+
+	joinRoom(t, h, clientA, roomID, "alice")
+	_ = waitCollectedEvent(t, inboxA, "room_joined", 2*time.Second, nil)
+
+	sessB, _, cleanupB := dialTestSession(t)
+	defer cleanupB()
+	h.Register(sessB)
+	clientBID, _ := sessB.Get("client_id")
+	clientB := h.GetClient(clientBID.(string))
+	joinRoom(t, h, clientB, roomID, "bob")
+
+	payload := waitCollectedEvent(t, inboxA, "presence_update", 2*time.Second, func(p map[string]interface{}) bool {
+		return p["connection_id"] == clientB.ID
+	})
+	if payload["user_id"] != clientB.User.ID {
+		t.Fatalf("presence_update user_id = %v, want %q", payload["user_id"], clientB.User.ID)
+	}
+	if payload["x"] != office.SpawnX || payload["y"] != office.SpawnY {
+		t.Fatalf("presence_update pos = (%v,%v), want spawn", payload["x"], payload["y"])
+	}
+}
+
 func TestPresenceUpdateTeleportCorrected(t *testing.T) {
 	const roomID = "100003"
 	fs := newFakeStore()
