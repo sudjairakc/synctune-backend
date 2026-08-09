@@ -38,6 +38,7 @@ type Client struct {
 	LastY          float64
 	LastZoneID     string
 	LastDir        string
+	FollowingID    string // connection_id ที่กำลัง follow; ว่าง = ไม่ follow
 }
 
 // Hub จัดการ Connection Pool และ Broadcast
@@ -176,6 +177,7 @@ func (h *Hub) Unregister(session *melody.Session) {
 			log.Error().Err(err).Str("room_id", roomID).Str("client_id", clientID).Msg("failed to delete presence on disconnect")
 		}
 		broadcaster.BroadcastPresenceLeave(h, roomID, clientID, client.User.ID)
+		h.clearFollowersOf(roomID, clientID)
 	}
 
 	if roomEmpty {
@@ -245,6 +247,40 @@ func (h *Hub) OnlineUsersInRoom(roomID string) []model.User {
 		}
 	}
 	return users
+}
+
+// clearFollowersOf ล้าง FollowingID ของทุกคนที่ follow target ที่ disconnect แล้ว broadcast follow_updated
+func (h *Hub) clearFollowersOf(roomID, targetConnectionID string) {
+	h.mu.Lock()
+	var followers []*Client
+	if room := h.rooms[roomID]; room != nil {
+		for _, c := range room {
+			if c.FollowingID == targetConnectionID {
+				c.FollowingID = ""
+				followers = append(followers, c)
+			}
+		}
+	}
+	h.mu.Unlock()
+
+	ctx := context.Background()
+	for _, c := range followers {
+		p := model.Presence{
+			ConnectionID: c.ID,
+			UserID:       c.User.ID,
+			Username:     c.User.Username,
+			ProfileImg:   c.User.ProfileImg,
+			X:            c.LastX,
+			Y:            c.LastY,
+			Dir:          c.LastDir,
+			ZoneID:       c.LastZoneID,
+			FollowingID:  "",
+		}
+		if err := h.store.SetPresence(ctx, roomID, p); err != nil {
+			log.Error().Err(err).Str("room_id", roomID).Str("client_id", c.ID).Msg("failed to clear following on target disconnect")
+		}
+		broadcaster.BroadcastFollowUpdated(h, roomID, c.ID, "")
+	}
 }
 
 // ClientsInRoom คืน snapshot ของ Client ในห้อง (pointers; อ่าน field ด้วยความระมัดระวังเรื่อง race)

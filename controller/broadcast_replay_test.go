@@ -19,6 +19,7 @@ type fakeStore struct {
 	history    map[string][]model.HistorySong
 	vote       map[string]*model.Vote
 	claims     map[string]bool // "roomID:queueID" → claimed (จำลอง SET NX)
+	bellClaims map[string]bool // "roomID:from:to" → claimed (จำลอง bell SET NX)
 	settings   model.AppSettings
 	presence   map[string]map[string]model.Presence // roomID → connectionID → Presence
 	channelMsg map[string][]model.ChatMessage       // "roomID\x00channel" → messages (newest first)
@@ -30,6 +31,7 @@ func newFakeStore() *fakeStore {
 		history:    map[string][]model.HistorySong{},
 		vote:       map[string]*model.Vote{},
 		claims:     map[string]bool{},
+		bellClaims: map[string]bool{},
 		settings:   model.AppSettings{AllowSkipBroadcast: true}, // default: replay feature เปิด
 		presence:   map[string]map[string]model.Presence{},
 		channelMsg: map[string][]model.ChatMessage{},
@@ -77,6 +79,15 @@ func (f *fakeStore) ClaimSongEnded(_ context.Context, roomID, queueID string) (b
 		return false, nil // มี claim อยู่แล้ว (จำลอง SET NX fail)
 	}
 	f.claims[key] = true
+	return true, nil
+}
+
+func (f *fakeStore) TryClaimBell(_ context.Context, roomID, fromConnectionID, toConnectionID string, _ time.Duration) (bool, error) {
+	key := roomID + ":" + fromConnectionID + ":" + toConnectionID
+	if f.bellClaims[key] {
+		return false, nil
+	}
+	f.bellClaims[key] = true
 	return true, nil
 }
 

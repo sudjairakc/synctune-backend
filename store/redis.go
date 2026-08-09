@@ -106,6 +106,8 @@ type Store interface {
 	GetAllPresence(ctx context.Context, roomID string) ([]model.Presence, error)
 	// DeletePresence ลบ Presence ของ connection ออกจากห้อง
 	DeletePresence(ctx context.Context, roomID, connectionID string) error
+	// TryClaimBell ใช้ SET NX + TTL สำหรับ rate-limit bell ต่อคู่ from→to — true ถ้า claim สำเร็จ
+	TryClaimBell(ctx context.Context, roomID, fromConnectionID, toConnectionID string, ttl time.Duration) (bool, error)
 }
 
 // RedisStore คือ Implementation ของ Store ที่ใช้ Redis
@@ -617,6 +619,17 @@ func (s *RedisStore) ClaimSongEnded(ctx context.Context, roomID, queueID string)
 	ok, err := s.client.SetNX(ctx, key, 1, 60*time.Second).Result()
 	if err != nil {
 		return false, fmt.Errorf("ClaimSongEnded: %w", err)
+	}
+	return ok, nil
+}
+
+// TryClaimBell ใช้ SET NX + TTL เป็น cooldown ต่อคู่ from→to ในห้อง
+// คืน true ถ้า claim สำเร็จ (ring ได้) — false ถ้ายังอยู่ใน cooldown
+func (s *RedisStore) TryClaimBell(ctx context.Context, roomID, fromConnectionID, toConnectionID string, ttl time.Duration) (bool, error) {
+	key := "synctune:room:" + roomID + ":bell:" + fromConnectionID + ":" + toConnectionID
+	ok, err := s.client.SetNX(ctx, key, 1, ttl).Result()
+	if err != nil {
+		return false, fmt.Errorf("TryClaimBell: %w", err)
 	}
 	return ok, nil
 }

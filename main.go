@@ -200,6 +200,12 @@ func main() {
 			controller.HandleMeetingSend(h, client, msg.Payload)
 		case "dm_send":
 			controller.HandleDMSend(h, client, msg.Payload)
+		case "follow_start":
+			controller.HandleFollowStart(h, client, msg.Payload)
+		case "follow_stop":
+			controller.HandleFollowStop(h, client, msg.Payload)
+		case "bell_ring":
+			controller.HandleBellRing(h, client, msg.Payload)
 		default:
 			log.Warn().Str("event", msg.Event).Msg("unknown event received")
 		}

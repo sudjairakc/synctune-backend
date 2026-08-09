@@ -167,9 +167,23 @@ type presenceCorrectedPayload struct {
 	ZoneID string  `json:"zone_id"`
 }
 
+// followUpdatedPayload คือ payload ของ event follow_updated
+type followUpdatedPayload struct {
+	ConnectionID string `json:"connection_id"`
+	FollowingID  string `json:"following_id"`
+}
+
 // BroadcastPresenceUpdate broadcast event "presence_update" ไปทั้งห้อง
 func BroadcastPresenceUpdate(h hubInterface, roomID string, p model.Presence) {
 	h.BroadcastToRoom(roomID, "presence_update", p)
+}
+
+// BroadcastFollowUpdated broadcast event "follow_updated" ไปทั้งห้อง
+func BroadcastFollowUpdated(h hubInterface, roomID, connectionID, followingID string) {
+	h.BroadcastToRoom(roomID, "follow_updated", followUpdatedPayload{
+		ConnectionID: connectionID,
+		FollowingID:  followingID,
+	})
 }
 
 // BroadcastPresenceLeave broadcast event "presence_leave" ไปทั้งห้อง
