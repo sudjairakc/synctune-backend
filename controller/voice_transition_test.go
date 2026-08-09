@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/synctune/backend/hub"
+	"github.com/synctune/backend/model"
 	"github.com/synctune/backend/office"
 )
 
@@ -115,7 +116,8 @@ func TestVoiceTransitions_Table(t *testing.T) {
 	inbox := collectWSEvents(conn)
 	joinRoom(t, h, client, roomID, "alice")
 	_ = waitCollectedEvent(t, inbox, "room_joined", 2*time.Second, nil)
-	// spawn is open → no voice emit
+	// Join force-sync at open spawn → clear credentials
+	_ = waitVoiceCredentials(t, inbox, "", 2*time.Second)
 	if client.ActiveVoiceGroup != "" {
 		t.Fatalf("after join want empty ActiveVoiceGroup, got %q", client.ActiveVoiceGroup)
 	}
@@ -202,6 +204,8 @@ func TestSyncActiveVoice_UsesDeriveActiveVoiceGroup(t *testing.T) {
 			inbox := collectWSEvents(conn)
 			joinRoom(t, h, client, "160002", "carol")
 			_ = waitCollectedEvent(t, inbox, "room_joined", 2*time.Second, nil)
+			// Drain join force-sync clear
+			_ = waitVoiceCredentials(t, inbox, "", 2*time.Second)
 
 			client.LastX, client.LastY = tc.x, tc.y
 			client.BubbleID = tc.bubbleID
@@ -244,6 +248,8 @@ func TestSyncActiveVoice_MintFailThenRetryWhenConfigured(t *testing.T) {
 	inbox := collectWSEvents(conn)
 	joinRoom(t, h, client, roomID, "dave")
 	_ = waitCollectedEvent(t, inbox, "room_joined", 2*time.Second, nil)
+	// Drain join force-sync clear (open spawn)
+	_ = waitVoiceCredentials(t, inbox, "", 2*time.Second)
 
 	client.LastX, client.LastY = 1088, 256
 	client.LastZoneID = "meeting-a"
@@ -263,5 +269,67 @@ func TestSyncActiveVoice_MintFailThenRetryWhenConfigured(t *testing.T) {
 	}
 	if token, _ := payload["token"].(string); token == "" {
 		t.Fatal("expected non-empty token after remint")
+	}
+}
+
+// TestHandleJoin_EmitsVoiceClearAtSpawn — reconnect matrix: join at spawn force-syncs clear.
+func TestHandleJoin_EmitsVoiceClearAtSpawn(t *testing.T) {
+	withLiveKitEnv(t)
+	const roomID = "160018"
+
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+	sess, conn, cleanup := dialTestSession(t)
+	defer cleanup()
+	h.Register(sess)
+	id, _ := sess.Get("client_id")
+	client := h.GetClient(id.(string))
+	inbox := collectWSEvents(conn)
+
+	joinRoom(t, h, client, roomID, "erin")
+	_ = waitCollectedEvent(t, inbox, "room_joined", 2*time.Second, nil)
+	payload := waitVoiceCredentials(t, inbox, "", 2*time.Second)
+	if client.ActiveVoiceGroup != "" {
+		t.Fatalf("ActiveVoiceGroup = %q, want empty after open spawn", client.ActiveVoiceGroup)
+	}
+	if token, _ := payload["token"].(string); token != "" {
+		t.Fatalf("spawn clear should have empty token, got %q", token)
+	}
+}
+
+// TestSyncActiveVoiceOnJoin_MeetingZoneAfterPresence — join-path voice sync after
+// presence is set inside a meeting zone (simulates restore; production spawn is open).
+func TestSyncActiveVoiceOnJoin_MeetingZoneAfterPresence(t *testing.T) {
+	withLiveKitEnv(t)
+	const roomID = "160019"
+	want := "st:" + roomID + ":meet:meeting-a"
+
+	fs := newFakeStore()
+	h := hub.NewHub(fs)
+	go h.Run()
+	sess, conn, cleanup := dialTestSession(t)
+	defer cleanup()
+	h.Register(sess)
+	id, _ := sess.Get("client_id")
+	client := h.GetClient(id.(string))
+	inbox := collectWSEvents(conn)
+
+	h.SetClientRoom(client.ID, roomID)
+	h.SetClientUser(client.ID, model.User{ID: client.ID, Username: "erin"})
+	if _, err := placePresence(h, client, roomID, 1088, 256, "down"); err != nil {
+		t.Fatalf("placePresence: %v", err)
+	}
+
+	SyncActiveVoiceOnJoin(h, client)
+	payload := waitVoiceCredentials(t, inbox, want, 2*time.Second)
+	if client.ActiveVoiceGroup != want {
+		t.Fatalf("ActiveVoiceGroup = %q, want %q", client.ActiveVoiceGroup, want)
+	}
+	if token, _ := payload["token"].(string); token == "" {
+		t.Fatal("expected non-empty token for meeting voice on join sync")
+	}
+	if url, _ := payload["url"].(string); url == "" {
+		t.Fatal("expected non-empty url")
 	}
 }

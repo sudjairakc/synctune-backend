@@ -114,19 +114,29 @@ func HandlePresenceUpdate(h *hub.Hub, client *hub.Client, rawPayload json.RawMes
 
 // spawnPresence สร้าง Presence ที่จุด spawn และบันทึกลง store + client memory
 func spawnPresence(h *hub.Hub, client *hub.Client, roomID string) (model.Presence, error) {
+	return placePresence(h, client, roomID, office.SpawnX, office.SpawnY, "down")
+}
+
+// placePresence ตั้ง Presence ที่ (x,y) — ใช้ตอน spawn; ทดสอบ join+voice ใน meeting zone ได้
+func placePresence(h *hub.Hub, client *hub.Client, roomID string, x, y float64, dir string) (model.Presence, error) {
 	m := office.DefaultMap()
-	zoneID, _ := m.ZoneAt(office.SpawnX, office.SpawnY)
+	zoneID, _ := m.ZoneAt(x, y)
 	now := time.Now()
+	if dir == "" {
+		dir = "down"
+	}
 
 	p := model.Presence{
 		ConnectionID: client.ID,
 		UserID:       client.User.ID,
 		Username:     client.User.Username,
 		ProfileImg:   client.User.ProfileImg,
-		X:            office.SpawnX,
-		Y:            office.SpawnY,
-		Dir:          "down",
+		X:            x,
+		Y:            y,
+		Dir:          dir,
 		ZoneID:       zoneID,
+		BubbleID:     client.BubbleID,
+		FollowingID:  client.FollowingID,
 	}
 
 	if err := h.Store().SetPresence(context.Background(), roomID, p); err != nil {

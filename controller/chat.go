@@ -153,8 +153,9 @@ func HandleJoin(h *hub.Hub, client *hub.Client, rawPayload json.RawMessage) {
 		broadcaster.BroadcastPinsUpdated(h, roomID, pins)
 	}
 
-	// Recompute voice on join/reconnect restore (spawn or restored social state).
-	SyncActiveVoice(h, client)
+	// Reconnect matrix: always emit voice_credentials after presence spawn
+	// (clear at open spawn, or fresh token when presence is in a voice zone).
+	SyncActiveVoiceOnJoin(h, client)
 }
 
 // HandleSendMessage จัดการ Event send_message (รองรับ reply, thread, image)

@@ -87,6 +87,10 @@ func EmitVoiceCredentials(h *hub.Hub, client *hub.Client, cfg *config.Config, gr
 	return creds.GroupID
 }
 
+// joinVoiceSyncSentinel forces SyncActiveVoice to emit on join/reconnect even when
+// the derived group is empty (same as a fresh client's ActiveVoiceGroup default).
+const joinVoiceSyncSentinel = "__join_sync__"
+
 // SyncActiveVoice recomputes DeriveActiveVoiceGroup and emits credentials only when
 // the desired group differs from the last successfully emitted group.
 // ActiveVoiceGroup tracks credentials actually sent (empty after clear/mint failure)
@@ -104,6 +108,16 @@ func SyncActiveVoice(h *hub.Hub, client *hub.Client) {
 		return
 	}
 	client.ActiveVoiceGroup = EmitVoiceCredentials(h, client, config.Load(), groupID)
+}
+
+// SyncActiveVoiceOnJoin force-emits voice_credentials after presence is set on join
+// (reconnect matrix: recompute + new token, or clear when not in a voice zone).
+func SyncActiveVoiceOnJoin(h *hub.Hub, client *hub.Client) {
+	if client == nil {
+		return
+	}
+	client.ActiveVoiceGroup = joinVoiceSyncSentinel
+	SyncActiveVoice(h, client)
 }
 
 // ClearVoiceOnDisconnect emits clear credentials when the connection had an active group.
