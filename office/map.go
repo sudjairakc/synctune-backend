@@ -57,11 +57,13 @@ func (m *OfficeMap) InBounds(x, y float64) bool {
 	return x >= 0 && x < m.width && y >= 0 && y < m.height
 }
 
-// IsWalkable reports whether coordinates are on walkable floor.
-// Border wall tiles are classified via ZoneAt (ZoneWall); callers validating
-// movement should reject ZoneWall in addition to out-of-bounds positions.
+// IsWalkable reports whether coordinates are on walkable floor (in bounds and not a wall).
 func (m *OfficeMap) IsWalkable(x, y float64) bool {
-	return m.InBounds(x, y)
+	if !m.InBounds(x, y) {
+		return false
+	}
+	_, zt := m.ZoneAt(x, y)
+	return zt != ZoneWall
 }
 
 // ZoneAt returns the zone id and type for world-pixel coordinates.
