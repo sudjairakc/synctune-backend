@@ -16,6 +16,13 @@ type Config struct {
 	AllowedOrigins        string // comma-separated, "*" = allow all
 	AdminToken            string // Bearer token สำหรับ /admin endpoints
 	PromptPayPhone        string // เบอร์โทรสำหรับ PromptPay QR
+	PresenceMaxSpeedPxPerSec int   // px/s — clamp ความเร็วเคลื่อนที่
+	PresenceMinIntervalMs    int64 // ms — ความถี่ขั้นต่ำของ presence update (~15 Hz)
+	BellCooldownMs           int64 // ms — cooldown ระหว่าง ring bell
+	FollowStopDistancePx     int   // px — ระยะหยุด follow
+	LiveKitURL               string
+	LiveKitAPIKey            string
+	LiveKitAPISecret         string
 }
 
 // Load อ่านค่าจาก Environment Variables พร้อม Default fallback
@@ -28,8 +35,15 @@ func Load() *Config {
 		RateLimitAddSong:      getEnvInt("RATE_LIMIT_ADD_SONG", 10),
 		LogLevel:              getEnv("LOG_LEVEL", "info"),
 		AllowedOrigins:        getEnv("ALLOWED_ORIGINS", "*"),
-		AdminToken:            getEnv("ADMIN_TOKEN", ""),
-		PromptPayPhone:        getEnv("PROMPTPAY_PHONE", "0853997206"),
+		AdminToken:               getEnv("ADMIN_TOKEN", ""),
+		PromptPayPhone:           getEnv("PROMPTPAY_PHONE", "0853997206"),
+		PresenceMaxSpeedPxPerSec: getEnvInt("PRESENCE_MAX_SPEED_PX_PER_SEC", 240),
+		PresenceMinIntervalMs:    getEnvInt64("PRESENCE_MIN_INTERVAL_MS", 66),
+		BellCooldownMs:           getEnvInt64("BELL_COOLDOWN_MS", 5000),
+		FollowStopDistancePx:     getEnvInt("FOLLOW_STOP_DISTANCE_PX", 48),
+		LiveKitURL:               getEnv("LIVEKIT_URL", ""),
+		LiveKitAPIKey:            getEnv("LIVEKIT_API_KEY", ""),
+		LiveKitAPISecret:         getEnv("LIVEKIT_API_SECRET", ""),
 	}
 }
 
@@ -43,6 +57,15 @@ func getEnv(key, defaultVal string) string {
 func getEnvInt(key string, defaultVal int) int {
 	if val := os.Getenv(key); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
+			return i
+		}
+	}
+	return defaultVal
+}
+
+func getEnvInt64(key string, defaultVal int64) int64 {
+	if val := os.Getenv(key); val != "" {
+		if i, err := strconv.ParseInt(val, 10, 64); err == nil {
 			return i
 		}
 	}
