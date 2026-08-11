@@ -12,8 +12,10 @@ import (
 )
 
 // hubInterface ป้องกัน Circular Import
+// Must satisfy broadcaster.hubInterface (BroadcastSeekSync) plus ActiveRooms.
 type hubInterface interface {
 	BroadcastToRoom(roomID string, event string, payload interface{})
+	BroadcastToRoomExcept(roomID string, excludeID string, event string, payload interface{})
 	SendToSession(session *melody.Session, event string, payload interface{})
 	ActiveRooms() []string
 }
